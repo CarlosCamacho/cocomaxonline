@@ -9,6 +9,7 @@ Draw in authentic 256×192 four‑color artifact graphics, load real CoCo disk i
 preview your work the way it would have looked on a composite TV, and export back out
 to `.DSK`, `.MAX`, `.BIN`, and more.
 
+[![Color Spritx editor](docs/screenshot.png)](docs/screenshot.png)
 ---
 
 ## Table of contents
