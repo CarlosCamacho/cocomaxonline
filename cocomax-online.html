@@ -1,0 +1,2256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CoCo Max Online</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400..700&family=Doto:wght@100..900&family=Tiny5&family=Micro+5&family=Jacquarda+Bastarda+9&family=Bytesized&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   CoCo Max Online
+   A PMODE-4 artifact-color paint program in the MacPaint idiom.
+   - Source of truth per layer: a 256x192 1bpp PMODE 4 page.
+   - Color emerges from pixel parity via the artifact shader.
+   - Floating windows hover over an artifact-stripe desktop.
+   ============================================================ */
+:root{
+  --ink:#000; --paper:#fff;
+  --orange:#e8801c; --blue:#2b6fe0;
+  --chrome:#fff; --frame:#000;
+  --winshadow: 3px 3px 0 rgba(0,0,0,.45);
+  --mac-font:'ChicagoFLF','Chicago','Charcoal','Geneva','Tahoma',Verdana,sans-serif;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;height:100%;overflow:hidden;}
+body{
+  font-family:var(--mac-font); font-weight:700; color:#000;
+  user-select:none;-webkit-user-select:none;
+  background:#888;
+}
+
+/* ---------- artifact-stripe desktop ---------- */
+/* Horizontal scanlines of orange/blue over black. Rendered as a pixel-exact
+   6px-tall tile (set from JS as a data-URL) so there is no sub-pixel rounding
+   or moire. No blend overlay — that caused diagonal interference seams. */
+#desktop{
+  position:fixed; inset:0; z-index:0;
+  background-color:#000;
+  background-repeat:repeat;
+  image-rendering:pixelated;
+}
+
+/* ---------- top menu bar (fixed, MacPaint style) ---------- */
+#menubar{
+  position:fixed;top:0;left:0;right:0;height:24px;z-index:1000;
+  background:#fff;border-bottom:2px solid #000;
+  display:flex;align-items:stretch;padding:0 4px;
+  font-size:15px;letter-spacing:.3px;
+}
+.menu{padding:2px 12px 0;cursor:default;position:relative;display:flex;align-items:center;line-height:1;}
+.menu:hover,.menu.open{background:#000;color:#fff;}
+.dropdown{
+  position:absolute;top:100%;left:0;min-width:210px;background:#fff;color:#000;
+  border:2px solid #000;box-shadow:var(--winshadow);
+  z-index:1100;display:none;padding:3px 0;font-size:14px;
+}
+.menu.open .dropdown{display:block;}
+.mi{padding:2px 18px 2px 26px;cursor:default;white-space:nowrap;position:relative;
+    display:flex;justify-content:space-between;gap:26px;}
+.mi:hover:not(.disabled){background:#000;color:#fff;}
+.mi.disabled{color:#aaa;}
+.mi .sc{opacity:.8;font-weight:700;}
+.mi.check::before{content:"✓";position:absolute;left:9px;}
+.mi.nocheck::before{content:"";}
+.mi.sep{padding:0;margin:4px 10px;border-top:1px dotted #000;height:0;pointer-events:none;}
+#aboutmenu{font-weight:900;font-size:16px;}
+
+/* ---------- floating windows ---------- */
+.win{
+  position:absolute;z-index:10;background:#fff;
+  border:2px solid #000;box-shadow:var(--winshadow);
+}
+.win.focused{z-index:60;}
+/* utility palettes always float above the document window */
+#toolbox,#patwin,#layerwin{z-index:40;}
+#toolbox.focused,#patwin.focused,#layerwin.focused{z-index:70;}
+/* title bar: the striped MacPaint look */
+.titlebar{
+  height:18px;border-bottom:2px solid #000;display:flex;align-items:center;
+  position:relative;cursor:move;
+  background:
+    repeating-linear-gradient(to bottom,#000 0,#000 1px,#fff 1px,#fff 2px);
+}
+.titlebar .closebox{
+  width:11px;height:11px;border:2px solid #000;background:#fff;margin:0 5px;flex:0 0 auto;cursor:pointer;
+}
+.titlebar .ttl{
+  background:#fff;padding:0 8px;font-size:12px;line-height:1;margin:0 auto;
+  white-space:nowrap;border-left:2px solid #000;border-right:2px solid #000;
+}
+.titlebar.plain{background:#fff;}
+.win .body{position:relative;}
+
+/* ---------- toolbox ---------- */
+#toolbox{left:14px;top:45px;width:auto;}
+#toolbox .body{display:grid;grid-template-columns:repeat(2,33px);gap:0;background:#000;}
+.toolbtn{
+  width:33px;height:30px;background:#fff;display:flex;align-items:center;justify-content:center;
+  cursor:pointer;border:1px solid #000;margin:-0.5px;
+}
+.toolbtn img{width:26px;height:24px;object-fit:contain;image-rendering:pixelated;pointer-events:none;}
+.toolbtn.active{background:#000;}
+.toolbtn.active img{filter:invert(1);}
+/* line-width selector under the tools */
+#lwsel{margin-top:0;border-top:2px solid #000;background:#fff;padding:5px 6px;display:flex;flex-direction:column;gap:5px;align-items:stretch;}
+.lwrow{display:flex;align-items:center;gap:6px;height:11px;cursor:pointer;}
+.lwrow .chk{width:12px;text-align:center;font-size:12px;}
+.lwrow .bar{flex:1;background:#000;}
+
+/* ---------- pattern palette ---------- */
+#patwin{left:110px;top:710px;}
+#patwin .body{display:flex;align-items:stretch;background:#000;gap:0;padding:0;}
+#curpat{width:64px;height:64px;border-right:2px solid #000;flex:0 0 auto;image-rendering:pixelated;}
+#patgrid{display:grid;grid-template-rows:repeat(4,32px);grid-auto-flow:column;grid-auto-columns:32px;gap:2px;background:#000;padding:2px;}
+.patcell{width:32px;height:32px;border:2px solid #000;outline:1px solid #fff;margin:0;image-rendering:pixelated;cursor:pointer;}
+.patcell.active{outline:3px solid var(--orange);outline-offset:0;z-index:2;}
+
+/* ---------- document window ---------- */
+#docwin{left:110px;top:45px;}
+#docwin .titlebar{cursor:move;}
+#doctools{height:22px;background:#ddd;border-bottom:2px solid #000;display:flex;align-items:center;gap:8px;padding:0 8px;font-size:11px;font-weight:700;color:#333;}
+#doctools button{font:inherit;font-size:11px;border:1px solid #000;background:#eee;cursor:pointer;padding:0 6px;border-radius:3px;}
+#doctools button.on{background:#000;color:#fff;}
+/* Fixed-size scrollable viewport: zoom scales the canvas inside, the window
+   stays put and shows scrollbars when the content is larger than the viewport. */
+#canvaswrap{position:relative;background:#999;overflow:auto;width:768px;height:576px;max-width:calc(100vw - 40px);max-height:calc(100vh - 160px);}
+#cvstage{position:relative;}
+#cv{display:block;image-rendering:pixelated;cursor:crosshair;background:#777;}
+#overlay{position:absolute;left:0;top:0;pointer-events:none;image-rendering:pixelated;}
+
+/* ---------- layers window ---------- */
+#layerwin{left:725px;top:45px;width:250px;}
+#layerwin .body{background:#fff;}
+#layerlist{max-height:280px;overflow:auto;}
+.layeritem{display:flex;align-items:center;gap:6px;padding:4px 6px;border-bottom:1px solid #000;font-size:12px;font-weight:700;cursor:pointer;background:#fff;}
+.layeritem.active{background:#000;color:#fff;}
+.layeritem.active .lthumb{outline:1px solid #fff;}
+.layeritem .eye{width:16px;text-align:center;cursor:pointer;flex:0 0 auto;}
+.layeritem .lthumb{width:42px;height:32px;border:1px solid #000;image-rendering:pixelated;flex:0 0 auto;background:#fff;}
+.layeritem .lname{flex:1;outline:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.layeritem.dragover{box-shadow:inset 0 3px 0 var(--orange);}
+#layerbtns{display:flex;flex-wrap:nowrap;gap:4px;padding:6px;border-top:2px solid #000;justify-content:space-between;}
+#layerbtns button{font:inherit;font-size:11px;font-weight:700;border:2px solid #000;background:#fff;cursor:pointer;padding:2px 6px;border-radius:9px;box-shadow:1px 1px 0 #000;white-space:nowrap;}
+#layerbtns button:active{box-shadow:none;transform:translate(1px,1px);}
+
+/* ---------- disk gallery window ---------- */
+#diskwin{left:990px;top:45px;width:430px;z-index:50;}
+#previewwin{left:725px;top:330px;}
+#diskwin.focused{z-index:80;}
+#diskwin .body{background:#fff;}
+#diskinfo{font-size:11px;font-weight:700;padding:5px 8px;border-bottom:2px solid #000;background:#ddd;color:#222;}
+#diskgallery{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:8px;max-height:340px;overflow:auto;}
+.diskitem{display:flex;flex-direction:column;align-items:center;gap:3px;padding:4px;border:2px solid #000;cursor:pointer;background:#fff;font-size:10px;font-weight:700;}
+.diskitem.active{background:#000;color:#fff;}
+.diskitem .dthumb{width:80px;height:60px;border:1px solid #000;image-rendering:pixelated;background:#888;}
+.diskitem .dname{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:84px;}
+.diskitem.active .dthumb{outline:1px solid #fff;}
+#diskbtns{display:flex;flex-wrap:wrap;gap:4px;padding:6px;border-top:2px solid #000;justify-content:space-between;}
+#diskbtns button{font:inherit;font-size:11px;font-weight:700;border:2px solid #000;background:#fff;cursor:pointer;padding:2px 7px;border-radius:9px;box-shadow:1px 1px 0 #000;white-space:nowrap;}
+#diskbtns button:active{box-shadow:none;transform:translate(1px,1px);}
+#diskbtns button:disabled{color:#aaa;box-shadow:none;cursor:default;}
+
+/* ---------- modal dialogs ---------- */
+#modal{position:fixed;inset:0;z-index:2000;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.25);}
+#dlg{background:#fff;border:2px solid #000;box-shadow:5px 5px 0 rgba(0,0,0,.55);padding:18px 20px;min-width:320px;max-width:90vw;max-height:90vh;overflow:auto;}
+#dlg h3{margin:0 0 12px;font-size:16px;}
+#dlg .row{display:flex;gap:10px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap;}
+.btn{font:inherit;font-weight:700;font-size:13px;border:2px solid #000;background:#fff;cursor:pointer;padding:4px 16px;border-radius:11px;box-shadow:1px 1px 0 #000;}
+.btn:active{transform:translate(1px,1px);box-shadow:none;}
+.btn.default{box-shadow:0 0 0 2px #000, 2px 2px 0 #000;}
+.txt{font:inherit;font-size:14px;border:2px solid #000;padding:5px 8px;width:100%;}
+label.fld{display:block;margin:8px 0;font-size:13px;font-weight:700;}
+select.txt,input[type=number].txt{width:auto;}
+
+/* color-mapping dialog */
+#mapgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px;}
+.mapcell{border:2px solid #000;padding:5px;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;}
+.mapcell .sw{width:42px;height:28px;border:1px solid #000;}
+.mapcell .pat{width:42px;height:42px;border:1px solid #000;image-rendering:pixelated;cursor:pointer;}
+.mapcell .pat:hover{outline:2px solid var(--orange);}
+
+/* text-tool insertion overlay */
+#textentry{position:absolute;z-index:80;display:none;}
+#textentry input{font-family:'Times New Roman',Georgia,serif;font-weight:700;border:1px dotted #00f;background:rgba(255,255,255,.6);padding:0;outline:none;}
+
+.hidden{display:none !important;}
+</style>
+</head>
+<body>
+<div id="desktop"></div>
+
+<!-- ===== Menu bar ===== -->
+<div id="menubar">
+  <div class="menu" data-menu="about" id="aboutmenu">✿<div class="dropdown" id="m-about"></div></div>
+  <div class="menu" data-menu="file">File<div class="dropdown" id="m-file"></div></div>
+  <div class="menu" data-menu="edit">Edit<div class="dropdown" id="m-edit"></div></div>
+  <div class="menu" data-menu="goodies">Goodies<div class="dropdown" id="m-goodies"></div></div>
+  <div class="menu" data-menu="font">Font<div class="dropdown" id="m-font"></div></div>
+  <div class="menu" data-menu="style">Style<div class="dropdown" id="m-style"></div></div>
+  <div class="menu" data-menu="windows">Windows<div class="dropdown" id="m-windows"></div></div>
+</div>
+
+<!-- ===== Toolbox window ===== -->
+<div class="win" id="toolbox">
+  <div class="titlebar plain" style="height:11px"></div>
+  <div class="body">
+    <div id="toolgrid" style="display:contents"></div>
+  </div>
+  <div id="lwsel"></div>
+</div>
+
+<!-- ===== Document window ===== -->
+<div class="win focused" id="docwin">
+  <div class="titlebar"><span class="closebox" data-close="doc"></span><span class="ttl" id="doctitle">untitled</span></div>
+  <div id="doctools">
+    <span>View:</span>
+    <button id="zoomout">–</button><span id="zoomlabel">100%</span><button id="zoomin">+</button>
+    <button id="fatbtn">Fat Bits</button>
+    <button id="dispbtn">Composite</button>
+    <button id="ntscbtn">NTSC Fringe</button>
+    <button id="cssbtn">CSS 0</button>
+    <span id="coord" style="margin-left:auto"></span>
+  </div>
+  <div class="body">
+    <div id="canvaswrap">
+      <div id="cvstage">
+        <canvas id="cv"></canvas>
+        <canvas id="overlay"></canvas>
+        <div id="textentry"><input id="textinput" type="text" spellcheck="false"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Layers window ===== -->
+<div class="win" id="layerwin">
+  <div class="titlebar"><span class="ttl">Layers</span></div>
+  <div class="body">
+    <div id="layerlist"></div>
+    <div id="layerbtns">
+      <button id="lnew">New</button>
+      <button id="lmerge">Merge</button>
+      <button id="ldup">Dup</button>
+      <button id="ldel">Del</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Preview window (1:1, 256x192) ===== -->
+<div class="win" id="previewwin">
+  <div class="titlebar"><span class="closebox" data-close="preview"></span><span class="ttl">Preview</span></div>
+  <div class="body" style="background:#777;padding:0;line-height:0">
+    <canvas id="previewcv" width="256" height="192" style="display:block;image-rendering:pixelated;width:256px;height:192px"></canvas>
+  </div>
+</div>
+
+<!-- ===== Pattern palette window ===== -->
+<div class="win" id="patwin">
+  <div class="titlebar"><span class="ttl">Patterns</span></div>
+  <div class="body">
+    <canvas id="curpat" width="64" height="64"></canvas>
+    <div id="patgrid"></div>
+  </div>
+</div>
+
+<!-- ===== Disk gallery window ===== -->
+<div class="win hidden" id="diskwin">
+  <div class="titlebar"><span class="closebox" data-close="disk"></span><span class="ttl" id="disktitle">Disk</span></div>
+  <div class="body">
+    <div id="diskinfo"></div>
+    <div id="diskgallery"></div>
+    <div id="diskbtns">
+      <button id="dkload">Load</button>
+      <button id="dksave">Save→Disk</button>
+      <button id="dkdup">Duplicate</button>
+      <button id="dkdel">Delete</button>
+      <button id="dkdownload">Download .DSK</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Modal ===== -->
+<div id="modal"><div id="dlg"></div></div>
+
+<input type="file" id="fileinput" class="hidden">
+<script>
+const PATTERNS_64_DATA=[[255,255,255,255,255,255,255,255],[0,0,0,0,0,0,0,0],[170,170,170,170,170,170,170,170],[85,85,85,85,85,85,85,85],[238,238,238,238,238,238,238,238],[17,17,17,17,17,17,17,17],[186,186,186,186,186,186,186,186],[69,69,69,69,69,69,69,69],[255,255,0,255,255,0,255,255],[0,0,255,0,0,255,0,0],[170,170,0,170,170,0,170,170],[85,85,255,85,85,255,85,85],[255,170,255,85,255,170,255,85],[0,85,0,170,0,85,0,170],[170,85,170,85,170,85,170,85],[85,170,85,170,85,170,85,170],[255,255,223,255,255,247,255,255],[0,0,32,0,0,8,0,0],[170,170,138,170,170,162,170,170],[85,85,117,85,85,93,85,85],[255,239,255,255,255,251,255,255],[0,16,0,0,0,4,0,0],[170,186,170,170,170,174,170,170],[85,69,85,85,85,81,85,85],[255,221,255,119,255,221,255,119],[0,34,0,136,0,34,0,136],[170,136,170,34,170,136,170,34],[85,119,85,221,85,119,85,221],[255,255,255,0,255,255,255,0],[0,0,0,255,0,0,0,255],[170,170,170,0,170,170,170,0],[85,85,85,255,85,85,85,255],[255,255,0,0,255,255,0,0],[0,0,255,255,0,0,255,255],[170,170,0,0,170,170,0,0],[85,85,255,255,85,85,255,255],[238,238,238,238,238,238,238,238],[17,17,17,17,17,17,17,17],[187,187,187,187,187,187,187,187],[68,68,68,68,68,68,68,68],[204,204,204,204,204,204,204,204],[51,51,51,51,51,51,51,51],[153,153,153,153,153,153,153,153],[102,102,102,102,102,102,102,102],[255,255,204,255,255,51,255,255],[0,0,51,0,0,204,0,0],[170,170,153,170,170,51,170,170],[85,85,102,85,85,204,85,85],[238,238,255,255,119,119,255,255],[17,17,0,0,136,136,0,0],[186,186,170,170,34,34,170,170],[69,69,85,85,221,221,85,85],[254,253,251,247,239,223,191,127],[1,2,4,8,16,32,64,128],[171,168,174,162,186,138,234,42],[84,87,81,93,69,117,21,213],[127,191,223,239,247,251,253,254],[128,64,32,16,8,4,2,1],[42,234,138,186,162,174,168,171],[213,21,117,69,93,81,87,84],[255,136,170,136,255,136,170,136],[0,119,85,119,0,119,85,119],[170,34,170,34,170,34,170,34],[85,221,85,221,85,221,85,221]];
+const PAT_NAMES=["Solid White","Solid Black","Solid Blue Artifact","Solid Orange Artifact","White with thin black vertical pinstripes","Black with thin white vertical pinstripes","Blue vertical phase A","Orange vertical phase A","White with thin black horizontal pinstripes","Black with thin white horizontal pinstripes","Blue horizontal artifact bands","Orange horizontal artifact bands","White light checker","Black dark checker","Blue checker phase","Orange checker phase","White sparse black dots","Black sparse white dots","Blue sparse shifted dots","Orange sparse shifted dots","White offset black dots","Black offset white dots","Blue offset dots","Orange offset dots","White dense dotted fabric","Black dense dotted fabric","Blue dense dotted fabric","Orange dense dotted fabric","White thin horizontal stripes","Black thin horizontal stripes","Blue thin horizontal stripes","Orange thin horizontal stripes","White two-pixel horizontal stripes","Black two-pixel horizontal stripes","Blue two-pixel horizontal stripes","Orange two-pixel horizontal stripes","White thin vertical stripes","Black thin vertical stripes","Blue thin vertical stripes","Orange thin vertical stripes","White two-pixel vertical stripes","Black two-pixel vertical stripes","Blue two-pixel vertical stripes","Orange two-pixel vertical stripes","White dashed horizontal","Black dashed horizontal","Blue dashed horizontal","Orange dashed horizontal","White dashed vertical","Black dashed vertical","Blue dashed vertical","Orange dashed vertical","White rising diagonal","Black rising diagonal","Blue rising diagonal","Orange rising diagonal","White falling diagonal","Black falling diagonal","Blue falling diagonal","Orange falling diagonal","White grid","Black grid","Blue grid","Orange grid"];
+const ICON={
+  lasso:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAbUlEQVR4nLWUwRoAEAiD8f7vzIlD35oa7Yj9Uqk3X9NZ78RDNQk0su+avp9NR8E8Q4CFVAa2KslxxqDU4xiROdxqt2a3EPlzMLD8fAZOQ1m7PUXogTdUzikCP0MRGEG/Fg1dltJtVpREKw30ci19KR734JDg6wAAAABJRU5ErkJggg==",
+  marquee:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAL0lEQVR4nGNgoAP4D8XUEEOXpw2gli30cS01bRp1Me1tGnUx7W2ir4uHVuk2wgEADnUd4wQl/uIAAAAASUVORK5CYII=",
+  hand:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAa0lEQVR4nOWUSw4AIQhD1Xj/K+PWNHyqYGYx3WgCPAsxtPahBM4nUFFiZVCqg3H7aqQs2HSNYPGSQd0LToD27Z6SNQrXjWIkTGR13BFbcDUqpijMefaPLXmO0j9GA5QtIgTR4Bmn1K7LH2oBFhMd+angMT8AAAAASUVORK5CYII=",
+  text:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAWklEQVR4nO2TQQ5AEQwFh7j/lWsnFuir/1mZFUlfTYOEj3XrJNQDkNXCKF5jc/bbjY9gjI0l6+vGKzPJ+pjx6F3KNz/JA1B2QsHDW0ANLWuv/LzweB9zj8dfVNrhEwUOoaBRAAAAAElFTkSuQmCC",
+  bucket:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAbklEQVR4nM2SQQrAMAgEY8n/v5yeCiE2OiqhnVMI7rqorR1CNv+joDXxjEljJaAis1aWQpneHnOtGksHwjdSoyBCWqdExDicmiRJmXpiZHpVOldY0+ERWOcWNouSOq2oOYYsL5X4s6t4OLbA/3ADqOcf9mqMMJIAAAAASUVORK5CYII=",
+  spray:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAUElEQVR4nGNgIB38J8Cn2EBS5UmyhKqGEcVnJMEgfGqJBti8SJK3WUg0nGJAsYuxhRsuAygOY4pdy8DAwMBEqStGDR44g3FlEJpkjlFAXQAAgnETBCLmqIUAAAAASUVORK5CYII=",
+  brush:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAUklEQVR4nO2QWwoAIAgEtfvf2T6LHrYaEoHzo4gOi0w40vV8Wi4GMST0imH+E6M/k8VMvUUSr6TaHBa7SLFZzJt6LQ5BgH7iaWKilm6sIfIEowJ2hAwVjJAN4wAAAABJRU5ErkJggg==",
+  pencil:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAS0lEQVR4nO2UMQ4AIAgDD///Z1yRKIN2k050uRQSamjkYTaAIYRa9K/gDJXIWU+QfUMb2tCTdi+dAbK3jemuV69KyHlIWYGljfWxJshsMeAJsdmHAAAAAElFTkSuQmCC",
+  line:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAKElEQVR4nO3MQREAAAzCsN78e2Ym4NcICPQF4BZpWxaxqampqWk3rnnuHiTe4GWI6AAAAABJRU5ErkJggg==",
+  eraser:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAT0lEQVR4nGNgGGqAkUh1/6lkDoah+AwmJE+2oQwE1JBtKEkGk2IoVoNZKHTJfwYSIo4YbxEMWyZibcNhOE7XYpMgNiLISrujYBSMAgYGBgATQxj02eRZ7gAAAABJRU5ErkJggg==",
+  rect:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAALklEQVR4nGNgGGqAEYvYfxqYSbHBcL1MFBiCF4waPGowJmDBIU5pJhkFo2BYAADwdQQROIZLxQAAAABJRU5ErkJggg==",
+  rectf:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAMklEQVR4nGNgGGqAEYvYf2qYyUSEpaTSOMF/Cmi8vkVWQC496uKh7GKaZZBRMAqGAwAA3aVAzSiKwpcAAAAASUVORK5CYII=",
+  rrect:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAK0lEQVR4nGNgGGqAEYf4fyqbR5GhKHqZKDAELxg1eNRgTEDXDDIKRsFQAwDl6wQPhYU/ewAAAABJRU5ErkJggg==",
+  rrectf:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAL0lEQVR4nGNgGGqAEYf4fyqbBzf0PxKbHBqnweTSBA0edfFIdjFdM8goGAVDDQAA7nBJu9nwlMEAAAAASUVORK5CYII=",
+  oval:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAARUlEQVR4nGNgoBFgJELNfwr1YzUQn6HEqsHQQHX1pBpKlD5yDcXQz0ShQTjB0DMYG6BJ5JFrOMlpmewMMiBZehSMAioDAB9sE/dp7Y6nAAAAAElFTkSuQmCC",
+  ovalf:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAATElEQVR4nGNgoBFgJELNf3L0MxEwEGYoIw4aWQ1R4D+ZNE0MxWs4pYbiNPw/FkWk0HgNHloupsRwolMG1Q0l1XCshtIsS4+CUUBHAADSY1K37qCweQAAAABJRU5ErkJggg==",
+  free:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAXUlEQVR4nO2UMQ4AIAgDxf//GVej2FKJm92M7UHAaA3Ll7MRPzX64X4ulC4ShZEn45OgslfqoJGuuwibBWdcAUt6MmPFrO4jFbqCsuA1FAHK0AgkQ9FbLP0LX1+7BgVHF/U6+SVhAAAAAElFTkSuQmCC",
+  freef:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAWklEQVR4nO3UQQoAIAgEQO3/f7arWKmbddPLEiwTFcTkj5g1B/2wKKYjKuFNLOql0HqaMqrx5yiE6yKaIYzml+uAH+85msWv0BNWRj28jO5wGB1JHP4XenrWmWeoSr+kqNs3AAAAAElFTkSuQmCC",
+  poly:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAATElEQVR4nGNgoBFgJEHtfwr1E20oTByXHNmGkqqGLA0kGTzCDMWWXIhJVv9x6CUJoFtEdvLCZzDVDEU2jKqGwgykuqEwg0fBKKACAAAGLhjtefOykgAAAABJRU5ErkJggg==",
+  polyf:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAU0lEQVR4nGNgoBFgJEHtf1L0M5FoKCMa/R+HhUQb+h+JjY+muqEkGTzCDMWWXHAlq/9INC69JAF0H5CdvLAZTLKh5GYQqhlMkqHEAqqF6SgY6QAALhox32Q+i28AAAAASUVORK5CYII=",
+  dropper:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAVElEQVR4nO3UQQ4AEAxEUXX/O9e6MrXoF5EwO7N4SoI1Fp/WBj2Jhq7v2EGlOrqalnhLOHSVq8imRXEBq+6jL6EoR1B89AwtJ3vS3uCHomCMKvD+DF/cLuApeCapAAAAAElFTkSuQmCC",
+  wand:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAVklEQVR4nO3RwRIAEAgE0OX//zknDkTJXgydzDReOwXwSojWgB7jGkBLLMqbimsDKGCPU1BgguYACgDJ6G+j1sfW9yZeJQ3vd+c47iG0i3/0QrTCD1cBwMko3n9Xg1IAAAAASUVORK5CYII=",
+  crop:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAPUlEQVR4nGNgwA3+45EjCJgo0TwgBjMiscnxOiNhJZgAn0UEHTH0wnjUYDjAl1zolvxIsnTohfEoGAWYAAAWfgYRcr5vRgAAAABJRU5ErkJggg==",
+  resize:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAUCAYAAACJfM0wAAAAU0lEQVR4nGNgoBFgROP/p0AvXkCswQTVMZFiKylg6BnMQiVzMMKcZi6mZnL7j0+SXPAfahYpDiPKUHT+f0rDGOZSqgJc3qYoOKgellQ1cBQMUgAA/SsRBZ7YgwMAAAAASUVORK5CYII="
+};
+/* ===================== Geometry & palette ===================== */
+const W=256, H=192, BPR=32, PAGE_BYTES=BPR*H;   // PMODE 4 page = 6144 bytes
+let SCALE=3;                                      // on-screen zoom
+const COL={ black:[0,0,0], white:[236,236,236], blue:[40,70,210], orange:[232,120,28] };
+
+/* ===================== Pattern library (64) =====================
+   From coco_mark_data_64_patterns.json. Convention: bit 1 = WHITE pixel,
+   0 = BLACK. Blue artifact = 0xAA (10101010), Orange artifact = 0x55.
+   Layout is 16 columns x 4 rows, IDs ordered column-major: IDs 1-4 are
+   column 1 top-to-bottom (white/black/blue/orange base), 5-8 column 2, etc.
+   PAT64[i] is pattern id (i+1).                                            */
+const PAT64=PATTERNS_64_DATA;   /* injected: array of 64 [8 bytes] */
+const PAT_COLS=16, PAT_ROWS=4;
+
+const TILE_WHITE =[0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF];
+const TILE_BLACK =[0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00];
+const TILE_BLUE  =[0xAA,0xAA,0xAA,0xAA,0xAA,0xAA,0xAA,0xAA];   /* AA = blue per JSON */
+const TILE_ORANGE=[0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55];   /* 55 = orange per JSON */
+/* The palette IS the 64-pattern library, in ID order. */
+const PALETTE=PAT64;
+
+/* Text-tool fonts — Google pixel/retro fonts. Each entry maps the menu label
+   to a CSS font-family and a recommended pixel size for the 256x192 canvas. */
+const FONT_FAMILIES=[
+ {name:"Pixelify Sans", css:"'Pixelify Sans', sans-serif", px:18},
+ {name:"Doto",          css:"'Doto', sans-serif",          px:20},
+ {name:"Tiny5",         css:"'Tiny5', sans-serif",         px:16},
+ {name:"Micro 5",       css:"'Micro 5', sans-serif",       px:20},
+ {name:"Jacquarda Bastarda 9", css:"'Jacquarda Bastarda 9', system-ui", px:22},
+ {name:"Bytesized",     css:"'Bytesized', sans-serif",     px:20},
+];
+const FONTS=FONT_FAMILIES.map(f=>({name:f.name, css:f.css, px:f.px, size:""}));
+
+/* ===================== TC1014 RGB222 (CoCo 3) 64-color palette ===================== */
+function rgb222(byte){
+  const b=byte&0x3f;
+  const r=(((b>>4)&2)|((b>>2)&1))*85;
+  const g=(((b>>3)&2)|((b>>1)&1))*85;
+  const bl=(((b>>2)&2)|(b&1))*85;
+  return [r,g,bl];
+}
+
+/* ===================== Layer model =====================
+   Each layer owns a 256x192 1bpp bitmap (1=lit pixel) plus a transparency
+   mask (1=pixel participates). For the base layer everything participates;
+   imported/painted layers track which pixels are "set" so layers below show
+   through transparent regions. Compositing is top-most-set-pixel wins.      */
+let layers=[];        // [{id,name,visible,bmp:Uint8Array, mask:Uint8Array}]
+let activeLayer=0;
+let layerSeq=1;
+
+function newBmp(fillLit){ return new Uint8Array(W*H).fill(fillLit?1:0); }
+function makeLayer(name,opaqueWhite){
+  // opaqueWhite: base layer is fully opaque, initialised to white (lit)
+  const bmp=newBmp(opaqueWhite?1:0);
+  const mask=newBmp(opaqueWhite?1:0);   // base: all participate; others: empty
+  return {id:layerSeq++, name:name||('Layer '+layerSeq), visible:true, bmp, mask};
+}
+function curLayer(){ return layers[activeLayer]; }
+
+function initLayers(){
+  layers=[ makeLayer('Background', true) ];
+  activeLayer=0;
+}
+
+/* composite all visible layers into a single 1bpp page (top set pixel wins).
+   Pixels with no set layer default to white (lit), matching a blank CoCo page. */
+function composite(){
+  const out=new Uint8Array(W*H).fill(1);
+  const seen=new Uint8Array(W*H);
+  for(let li=layers.length-1; li>=0; li--){
+    const L=layers[li]; if(!L.visible) continue;
+    const b=L.bmp, m=L.mask;
+    for(let i=0;i<out.length;i++){
+      if(!seen[i] && m[i]){ out[i]=b[i]; seen[i]=1; }
+    }
+  }
+  return out;
+}
+
+/* ---------- per-layer pixel helpers (operate on the ACTIVE layer) ---------- */
+function inb(x,y){ return x>=0&&x<W&&y>=0&&y<H; }
+function setLayerPx(x,y,lit){ if(inb(x,y)){const L=curLayer();const i=y*W+x;L.bmp[i]=lit?1:0;L.mask[i]=1;} }
+function clearLayerPx(x,y){ if(inb(x,y)){const L=curLayer();const i=y*W+x;L.bmp[i]=0;L.mask[i]=0;} }
+function getLayerLit(x,y){ const L=curLayer(); return inb(x,y)?L.bmp[y*W+x]:0; }
+
+/* ===================== Pattern-aware ink ===================== */
+let curPattern=TILE_BLACK.slice();
+let curPatternIndex=0;
+function patBit(x,y){ return (curPattern[y&7] >> (7-(x&7))) & 1; }
+
+/* drawing modes */
+let drawMode='paint';   // paint | erase
+function plot(x,y){
+  if(!inb(x,y)) return;
+  if(drawMode==='erase'){ clearLayerPx(x,y); }     // erase => make transparent
+  else setLayerPx(x,y, patBit(x,y));               // paint => stamp pattern bit
+}
+let lineWidth=1;
+function plotThick(x,y){
+  const r=lineWidth; if(r<=1){plot(x,y);return;}
+  const h=Math.floor(r/2);
+  for(let dy=-h;dy<=h-(r%2===0?1:0);dy++)
+    for(let dx=-h;dx<=h-(r%2===0?1:0);dx++) plot(x+dx,y+dy);
+}
+
+/* ===================== Canvas & render ===================== */
+let cssBit=0, dispMode='composite', ntscFringe=false;
+const cv=document.getElementById('cv');
+const overlay=document.getElementById('overlay');
+const ctx=cv.getContext('2d');
+const octx_holder=document.createElement('canvas'); octx_holder.width=W; octx_holder.height=H;
+const octx=octx_holder.getContext('2d');
+let imgData=octx.createImageData(W,H);
+
+function sizeCanvas(){
+  cv.width=W*SCALE; cv.height=H*SCALE;
+  overlay.width=W*SCALE; overlay.height=H*SCALE;
+  ctx.imageSmoothingEnabled=false;
+}
+
+/* artifact shader: render the composited page. Each 2-pixel chroma cell maps
+   to a SOLID color block (composite bleeds chroma horizontally):
+     11=>white  10=>orange  01=>blue  00=>black ; CSS swaps orange<->blue. */
+function render(){
+  const page=composite();
+  const d=imgData.data;
+  const oCol = cssBit? COL.blue : COL.orange;
+  const bCol = cssBit? COL.orange : COL.blue;
+  for(let y=0;y<H;y++){
+    const row=y*W;
+    for(let x=0;x<W;x+=2){
+      const hi=page[row+x], lo=(x+1<W)?page[row+x+1]:0;
+      if(dispMode==='rgb'){
+        for(const [xx,bit] of [[x,hi],[x+1,lo]]){
+          const i=(row+xx)*4, c=bit?COL.white:COL.black;
+          d[i]=c[0];d[i+1]=c[1];d[i+2]=c[2];d[i+3]=255;
+        }
+      } else {
+        let c;
+        if(hi&&lo) c=COL.white;
+        else if(hi&&!lo) c=bCol;     // even-col lit => blue (0xAA), CSS swaps
+        else if(!hi&&lo) c=oCol;     // odd-col lit  => orange (0x55)
+        else c=COL.black;
+        for(const xx of [x,x+1]){
+          const i=(row+xx)*4; d[i]=c[0];d[i+1]=c[1];d[i+2]=c[2];d[i+3]=255;
+        }
+      }
+    }
+  }
+  if(ntscFringe && dispMode!=='rgb'){ applyNTSCFringe(d); }
+  octx.putImageData(imgData,0,0);
+  ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.drawImage(octx_holder,0,0,cv.width,cv.height);
+  // Preview window: exact 1:1 256x192 copy of the rendered image
+  const pcv=document.getElementById('previewcv');
+  if(pcv){ const pctx=pcv.getContext('2d'); pctx.clearRect(0,0,W,H); pctx.drawImage(octx_holder,0,0); }
+  if(gridOn) drawGridOverlay();
+  if(rulersOn) drawRulers();
+  if(fatBits) renderFatBits();
+  drawSelOverlay();
+  scheduleThumbs();
+}
+
+/* NTSC composite simulation. Converts RGB to YIQ, then bandlimits the chroma
+   (I/Q) slightly more than the luma — exactly what an NTSC composite signal
+   does. Kept deliberately TIGHT: a single bright pixel on a contrasting
+   background gets only ~1px of colored fringe on each side (e.g. a blue pixel
+   on white fringes toward ~#a7e4ff), matching a real CoCo on composite. The
+   image stays crisp and readable — no heavy smearing. Operates on a flat RGBA
+   byte buffer `d` of dimensions w x h. */
+function ntscProcess(d, w, h){
+  const N=w*h;
+  const Y=new Float32Array(N), I=new Float32Array(N), Q=new Float32Array(N);
+  for(let p=0;p<N;p++){
+    const j=p*4, r=d[j]/255, g=d[j+1]/255, b=d[j+2]/255;
+    Y[p]=0.299*r+0.587*g+0.114*b;
+    I[p]=0.596*r-0.274*g-0.322*b;
+    Q[p]=0.211*r-0.523*g+0.312*b;
+  }
+  // tight horizontal box blur (n taps) per row
+  function hblur(buf,n){
+    const out=new Float32Array(N), half=(n-1)/2;
+    for(let y=0;y<h;y++){
+      const row=y*w;
+      for(let x=0;x<w;x++){
+        let acc=0;
+        for(let k=-half;k<=half;k++){ acc+=buf[row+Math.min(w-1,Math.max(0,x+k))]; }
+        out[row+x]=acc/n;
+      }
+    }
+    return out;
+  }
+  const Yb=hblur(Y,3);   // luma: barely softened (1px) so pixels aren't razor-hard
+  const Ib=hblur(I,3);   // chroma: ~1px bleed each side  (was 7 -> far too much)
+  const Qb=hblur(Q,3);
+  for(let p=0;p<N;p++){
+    const j=p*4, y=Yb[p], i=Ib[p], q=Qb[p];
+    let r=y+0.956*i+0.621*q, g=y-0.272*i-0.647*q, b=y-1.106*i+1.703*q;
+    d[j]  =r<0?0:r>1?255:(r*255)|0;
+    d[j+1]=g<0?0:g>1?255:(g*255)|0;
+    d[j+2]=b<0?0:b>1?255:(b*255)|0;
+  }
+}
+function applyNTSCFringe(d){ ntscProcess(d, W, H); }
+function pageToBmp(page){
+  const bm=new Uint8Array(W*H);
+  for(let y=0;y<H;y++)for(let bx=0;bx<BPR;bx++){
+    const b=page[y*BPR+bx]||0;
+    for(let bit=0;bit<8;bit++) bm[y*W+bx*8+bit]=(b>>(7-bit))&1;
+  }
+  return bm;
+}
+function bmpToPage(bm){
+  const page=new Uint8Array(PAGE_BYTES);
+  for(let y=0;y<H;y++)for(let bx=0;bx<BPR;bx++){
+    let b=0; for(let bit=0;bit<8;bit++) if(bm[y*W+bx*8+bit]) b|=(1<<(7-bit));
+    page[y*BPR+bx]=b;
+  }
+  return page;
+}
+
+/* ---------- LOADM (.MAX/.BIN) ---------- */
+function readLoadm(bytes){
+  let i=0; const segs=[]; const mem=new Uint8Array(0x10000); let exec=null;
+  while(i<bytes.length){
+    const flag=bytes[i];
+    if(flag===0xFF){ exec=(bytes[i+3]<<8)|bytes[i+4]; break; }
+    if(flag!==0x00) break;
+    const len=(bytes[i+1]<<8)|bytes[i+2], addr=(bytes[i+3]<<8)|bytes[i+4]; i+=5;
+    for(let k=0;k<len&&i+k<bytes.length;k++) mem[(addr+k)&0xFFFF]=bytes[i+k];
+    segs.push({addr,len}); i+=len;
+  }
+  let start=0x0E00;
+  if(segs.length && !segs.some(s=>s.addr<=0x0E00&&0x0E00<s.addr+s.len)) start=segs[0].addr;
+  return {page:mem.slice(start,start+PAGE_BYTES), exec, loadAddr:start};
+}
+function writeLoadm(page,loadAddr=0x0E00,execAddr=0x492B){
+  const out=new Uint8Array(5+PAGE_BYTES+5); let p=0;
+  out[p++]=0x00; out[p++]=(PAGE_BYTES>>8)&0xFF; out[p++]=PAGE_BYTES&0xFF;
+  out[p++]=(loadAddr>>8)&0xFF; out[p++]=loadAddr&0xFF;
+  out.set(page,p); p+=PAGE_BYTES;
+  out[p++]=0xFF;out[p++]=0;out[p++]=0;out[p++]=(execAddr>>8)&0xFF;out[p++]=execAddr&0xFF;
+  return out;
+}
+
+/* ===================== CoCo 3 indexed-image decoders =====================
+   Each returns {w,h,indices:Uint8Array(w*h of 0..15), pal:[[r,g,b]*16], title?}.
+   Colormaps are TC1014 RGB222 bytes -> rgb222(). Specs from the .dox files. */
+
+function unpack4bpp(data, count){       // 2 px/byte, high nibble = left pixel
+  const out=new Uint8Array(count);
+  for(let i=0;i<count;i++){
+    const b=data[i>>1]||0;
+    out[i]=(i&1)? (b&0x0F) : (b>>4);
+  }
+  return out;
+}
+function unpack2bpp(data, count){       // 4 px/byte
+  const out=new Uint8Array(count);
+  for(let i=0;i<count;i++){
+    const b=data[i>>2]||0; const sh=6-2*(i&3);
+    out[i]=(b>>sh)&0x03;
+  }
+  return out;
+}
+function unpack1bpp(data,count){
+  const out=new Uint8Array(count);
+  for(let i=0;i<count;i++){ const b=data[i>>3]||0; out[i]=(b>>(7-(i&7)))&1; }
+  return out;
+}
+function palFromBytes(bytes,n){ const p=[]; for(let i=0;i<16;i++) p.push(rgb222(i<n?(bytes[i]||0):0)); return p; }
+
+/* ---- HRS (Davinci 3): 16-byte colormap + 320x192 4bpp uncompressed ---- */
+function decodeHRS(bytes){
+  const pal=palFromBytes(bytes.subarray(0,16),16);
+  const idx=unpack4bpp(bytes.subarray(16), 320*192);
+  return {w:320,h:192,indices:idx,pal,fmt:'HRS'};
+}
+
+/* ---- MGE (ColorMax Deluxe): 51-byte header, optional RLE, 320x200 4bpp ---- */
+function decodeMGE(bytes){
+  const pal=palFromBytes(bytes.subarray(1,17),16);
+  const compFlag=bytes[18];                  // 0 = compressed (per spec)
+  let title=''; for(let i=19;i<49;i++){const c=bytes[i]; if(!c)break; title+=String.fromCharCode(c);}
+  const want=320*200, packed=new Uint8Array(want/2);
+  const data=bytes.subarray(51);
+  if(compFlag===0){
+    // RLE byte pairs (count,value); count 0 = end
+    let o=0,i=0;
+    while(i+1<data.length && o<packed.length){
+      const n=data[i++], v=data[i++]; if(n===0) break;
+      for(let k=0;k<n && o<packed.length;k++) packed[o++]=v;
+    }
+  } else {
+    packed.set(data.subarray(0,packed.length));
+  }
+  return {w:320,h:200,indices:unpack4bpp(packed,want),pal,title,fmt:'MGE'};
+}
+
+/* ---- CM3 (CoCoMax III): 29-byte header, optional 243-byte pattern table,
+        then 1 or 2 320x192 pages. Compression unspecified -> treat literal. */
+function decodeCM3(bytes){
+  const flags=bytes[0];
+  const pal=palFromBytes(bytes.subarray(1,17),16);
+  const twoPage=(flags>>7)&1;            // bit7: 0=1 page,1=2 pages
+  const excludePat=flags&1;              // bit0: 1=no patterns
+  let off=29 + (excludePat?0:243);
+  const rows=twoPage?384:192;
+  const want=320*rows;
+  const idx=unpack4bpp(bytes.subarray(off), want);
+  return {w:320,h:rows,indices:idx,pal,fmt:'CM3'};
+}
+
+/* ---- RAT (The Rat): 19-byte header (escape, compflag, 16 cmap, bg),
+        320x199 4bpp, escape-code RLE. ---- */
+function decodeRAT(bytes){
+  const esc=bytes[0], compFlag=bytes[1];
+  const pal=palFromBytes(bytes.subarray(2,18),16);
+  const want=320*199, packed=new Uint8Array(Math.ceil(want/2));
+  const data=bytes.subarray(19);
+  if(compFlag!==0){
+    let o=0,i=0;
+    while(i<data.length && o<packed.length){
+      const n=data[i++];
+      if(n===esc){ const r=data[i++], v=data[i++]; for(let k=0;k<r&&o<packed.length;k++) packed[o++]=v; }
+      else packed[o++]=n;
+    }
+  } else packed.set(data.subarray(0,packed.length));
+  return {w:320,h:199,indices:unpack4bpp(packed,want),pal,fmt:'RAT'};
+}
+
+/* ---- VEF (OS-9): 18-byte header, type table, optional "squashed" RLE ---- */
+const VEF_TYPES=[ {w:320,h:200,bpp:4},{w:640,h:200,bpp:2},{w:160,h:200,bpp:4},
+                  {w:320,h:200,bpp:2},{w:640,h:200,bpp:1} ];
+function decodeVEF(bytes){
+  const flags=bytes[0], type=bytes[1];
+  const t=VEF_TYPES[type]||VEF_TYPES[0];
+  const pal=palFromBytes(bytes.subarray(2,18),16);
+  const bytesPerRow=Math.ceil(t.w*t.bpp/8);
+  const total=bytesPerRow*t.h;
+  let raw=new Uint8Array(total);
+  const data=bytes.subarray(18);
+  if(flags&0x80){
+    // squashed: 400 half-row blocks; each: [len][packets]; packet hdr hi-bit=RLE
+    let i=0,o=0;
+    const halfBytes=bytesPerRow/2;
+    for(let blk=0; blk<t.h*2 && i<data.length; blk++){
+      const blen=data[i++]; const end=i+blen; const rowEnd=o+halfBytes;
+      while(i<end && o<rowEnd){
+        const hdr=data[i++];
+        if(hdr<128){ for(let k=0;k<hdr && o<raw.length;k++) raw[o++]=data[i++]; }
+        else { const v=data[i++]; for(let k=0;k<hdr-128 && o<raw.length;k++) raw[o++]=v; }
+      }
+      i=end; o=rowEnd;
+    }
+  } else raw.set(data.subarray(0,total));
+  let idx;
+  if(t.bpp===4) idx=unpack4bpp(raw,t.w*t.h);
+  else if(t.bpp===2) idx=unpack2bpp(raw,t.w*t.h);
+  else idx=unpack1bpp(raw,t.w*t.h);
+  return {w:t.w,h:t.h,indices:idx,pal,fmt:'VEF'};
+}
+
+function decodeCoco3(name,bytes){
+  const ext=(name.split('.').pop()||'').toUpperCase();
+  if(ext==='HRS') return decodeHRS(bytes);
+  if(ext==='MGE') return decodeMGE(bytes);
+  if(ext==='CM3') return decodeCM3(bytes);
+  if(ext==='RAT') return decodeRAT(bytes);
+  if(ext==='VEF') return decodeVEF(bytes);
+  // sniff by length
+  if(bytes.length===320*192/2+16) return decodeHRS(bytes);
+  return null;
+}
+
+/* ===================== 16-color -> artifact-pattern mapping =====================
+   To bring a CoCo3 (or PNG) image into the CoCo1 artifact world, each source
+   color is assigned one PALETTE entry (a black/white/blue/orange solid or a
+   dither pattern). We auto-pick a best-fit pattern by matching the pattern's
+   *perceived artifact color* to the source color, then let the user override. */
+
+/* Perceived RGB of a pattern under the artifact shader (average of cells). */
+function patternPerceivedRGB(tile){
+  let r=0,g=0,b=0,n=0;
+  for(let y=0;y<8;y++) for(let x=0;x<8;x+=2){
+    const hi=(tile[y]>>(7-x))&1, lo=(tile[y]>>(7-(x+1)))&1;
+    let c;
+    if(hi&&lo) c=COL.white; else if(hi&&!lo) c=COL.blue;
+    else if(!hi&&lo) c=COL.orange; else c=COL.black;
+    r+=c[0];g+=c[1];b+=c[2];n++;
+  }
+  return [r/n,g/n,b/n];
+}
+let PAT_PERCEIVED=null;
+function ensurePerceived(){ if(!PAT_PERCEIVED) PAT_PERCEIVED=PALETTE.map(patternPerceivedRGB); }
+function bestPatternFor(rgb){
+  ensurePerceived();
+  let best=0,bd=1e18;
+  for(let i=0;i<PAT_PERCEIVED.length;i++){
+    const p=PAT_PERCEIVED[i];
+    const d=(p[0]-rgb[0])**2+(p[1]-rgb[1])**2+(p[2]-rgb[2])**2;
+    if(d<bd){bd=d;best=i;}
+  }
+  return best;
+}
+
+/* Build an auto colour->pattern map for a decoded indexed image.
+   Returns {colors:[{index,rgb,count}], map:{srcIndex->paletteIndex}}. */
+function buildColorMap(img){
+  const counts=new Map();
+  for(let i=0;i<img.indices.length;i++){ const c=img.indices[i]; counts.set(c,(counts.get(c)||0)+1); }
+  const colors=[...counts.keys()].sort((a,b)=>a-b).map(ci=>({index:ci, rgb:img.pal[ci], count:counts.get(ci)}));
+  const map={};
+  colors.forEach(c=> map[c.index]=bestPatternFor(c.rgb));
+  return {colors, map};
+}
+
+/* Rasterize a decoded image into a new layer using a color->pattern map.
+   The image is scaled (nearest) to fit 256x192, centered. Each source pixel's
+   color maps to a pattern; the pattern bit at that (x,y) sets the 1bpp pixel. */
+function rasterizeToLayer(img, map, layerName){
+  const L=makeLayer(layerName||img.fmt+' image', false);
+  // scale to fit within 256x192 preserving aspect
+  const sw=img.w, sh=img.h;
+  const scale=Math.min(W/sw, H/sh);
+  const dw=Math.round(sw*scale), dh=Math.round(sh*scale);
+  const ox=Math.floor((W-dw)/2), oy=Math.floor((H-dh)/2);
+  for(let dy=0;dy<dh;dy++){
+    const syy=Math.min(sh-1, Math.floor(dy/scale));
+    for(let dx=0;dx<dw;dx++){
+      const sxx=Math.min(sw-1, Math.floor(dx/scale));
+      const ci=img.indices[syy*sw+sxx];
+      const tile=PALETTE[map[ci]] || TILE_BLACK;
+      const X=ox+dx, Y=oy+dy;
+      const bit=(tile[Y&7]>>(7-(X&7)))&1;
+      const i=Y*W+X;
+      L.bmp[i]=bit; L.mask[i]=1;     // opaque where the image covers
+    }
+  }
+  return L;
+}
+
+/* ===================== PNG -> indexed (<=16 colors) =====================
+   Median-cut quantization to <=16 colors, then routed through the same
+   color->pattern mapping pipeline as the CoCo3 formats. */
+function quantize16(rgbaData, w, h){
+  // collect pixels
+  const px=[]; for(let i=0;i<w*h;i++){ px.push([rgbaData[i*4],rgbaData[i*4+1],rgbaData[i*4+2]]); }
+  // median cut into <=16 boxes
+  let boxes=[{px:px}];
+  while(boxes.length<16){
+    // pick box with largest range
+    let bi=-1,brange=-1,bchan=0;
+    boxes.forEach((bx,k)=>{
+      if(bx.px.length<2) return;
+      for(let c=0;c<3;c++){
+        let mn=255,mx=0; for(const p of bx.px){ if(p[c]<mn)mn=p[c]; if(p[c]>mx)mx=p[c]; }
+        const r=mx-mn; if(r>brange){brange=r;bi=k;bchan=c;}
+      }
+    });
+    if(bi<0) break;
+    const bx=boxes[bi]; bx.px.sort((a,b)=>a[bchan]-b[bchan]);
+    const mid=bx.px.length>>1;
+    const b1={px:bx.px.slice(0,mid)}, b2={px:bx.px.slice(mid)};
+    boxes.splice(bi,1,b1,b2);
+  }
+  const pal=boxes.map(bx=>{
+    if(!bx.px.length) return [0,0,0];
+    let r=0,g=0,b=0; for(const p of bx.px){r+=p[0];g+=p[1];b+=p[2];}
+    const n=bx.px.length; return [Math.round(r/n),Math.round(g/n),Math.round(b/n)];
+  });
+  while(pal.length<16) pal.push([0,0,0]);
+  // map each pixel to nearest palette entry
+  const indices=new Uint8Array(w*h);
+  for(let i=0;i<w*h;i++){
+    const r=rgbaData[i*4],g=rgbaData[i*4+1],b=rgbaData[i*4+2];
+    let bk=0,bd=1e18;
+    for(let k=0;k<16;k++){const p=pal[k];const d=(p[0]-r)**2+(p[1]-g)**2+(p[2]-b)**2;if(d<bd){bd=d;bk=k;}}
+    indices[i]=bk;
+  }
+  return {w,h,indices,pal,fmt:'PNG'};
+}
+
+/* ===================== RS-DOS JV1 .DSK ===================== */
+const DSK_SECTOR=256,DSK_SPT=18,DSK_TRACKS=35,DSK_DIRTRACK=17,DSK_GRANSEC=9,DSK_GRANB=DSK_GRANSEC*DSK_SECTOR;
+function dskGranOffset(g){ let track=Math.floor(g/2); if(track>=DSK_DIRTRACK) track++; const sector=1+(g%2)*DSK_GRANSEC; return track*DSK_SPT*DSK_SECTOR+(sector-1)*DSK_SECTOR; }
+function makeDsk(files){
+  const disk=new Uint8Array(DSK_TRACKS*DSK_SPT*DSK_SECTOR).fill(0xFF);
+  const gatOff=DSK_DIRTRACK*DSK_SPT*DSK_SECTOR+1*DSK_SECTOR;
+  for(let i=0;i<68;i++) disk[gatOff+i]=0xFF;
+  for(let s=3;s<=11;s++){const o=DSK_DIRTRACK*DSK_SPT*DSK_SECTOR+(s-1)*DSK_SECTOR;for(let i=0;i<DSK_SECTOR;i++)disk[o+i]=0xFF;}
+  // capacity check: total granules must fit in 68, files in 72 dir entries
+  const totalGrans=files.reduce((a,f)=>a+Math.max(1,Math.ceil(f.bytes.length/DSK_GRANB)),0);
+  if(totalGrans>68) throw new Error('DISK_FULL');
+  if(files.length>72) throw new Error('DIR_FULL');
+  let nextGran=0,dirEntry=0;
+  for(const f of files){
+    const gransNeeded=Math.max(1,Math.ceil(f.bytes.length/DSK_GRANB));
+    const startGran=nextGran; let written=0;
+    for(let g=0;g<gransNeeded;g++){
+      const gran=nextGran++;
+      if(gran>=68) throw new Error('DISK_FULL');
+      disk.set(f.bytes.slice(written,written+DSK_GRANB), dskGranOffset(gran)); written+=DSK_GRANB;
+      if(g<gransNeeded-1){ disk[gatOff+gran]=nextGran; }
+      else{ const lastBytes=f.bytes.length-(gransNeeded-1)*DSK_GRANB; disk[gatOff+gran]=0xC0|Math.max(1,Math.ceil(lastBytes/DSK_SECTOR)); }
+    }
+    const secIdx=Math.floor(dirEntry/8),inSec=dirEntry%8;
+    const eo=DSK_DIRTRACK*DSK_SPT*DSK_SECTOR+(3-1+secIdx)*DSK_SECTOR+inSec*32; dirEntry++;
+    const nm=(f.name+'        ').slice(0,8),ex=(f.ext+'   ').slice(0,3);
+    for(let i=0;i<8;i++) disk[eo+i]=nm.charCodeAt(i);
+    for(let i=0;i<3;i++) disk[eo+8+i]=ex.charCodeAt(i);
+    // file type: 0=BASIC, 1=BASIC data, 2=machine-code/binary, 3=text editor
+    // ascii flag: 0x00=binary token, 0xFF=ASCII
+    const ftype=(f.ftype!=null)?f.ftype:2;
+    const ascii=(f.ascii!=null)?f.ascii:0x00;
+    disk[eo+11]=ftype; disk[eo+12]=ascii; disk[eo+13]=startGran;
+    const lastBytes=f.bytes.length-(gransNeeded-1)*DSK_GRANB;
+    const rem=lastBytes-Math.floor(lastBytes/DSK_SECTOR)*DSK_SECTOR;
+    disk[eo+14]=(rem>>8)&0xFF; disk[eo+15]=rem&0xFF;
+  }
+  return disk;
+}
+function dskListFiles(disk){
+  const out=[];
+  for(let s=3;s<=11;s++){
+    const so=DSK_DIRTRACK*DSK_SPT*DSK_SECTOR+(s-1)*DSK_SECTOR;
+    for(let i=0;i<DSK_SECTOR;i+=32){
+      const first=disk[so+i]; if(first===0x00||first===0xFF) continue;
+      let name='';for(let k=0;k<8;k++){const ch=disk[so+i+k];if(ch>=32&&ch<127)name+=String.fromCharCode(ch);}
+      let ext='';for(let k=0;k<3;k++){const ch=disk[so+i+8+k];if(ch>=32&&ch<127)ext+=String.fromCharCode(ch);}
+      out.push({name:name.trim(),ext:ext.trim(),ftype:disk[so+i+11],firstGran:disk[so+i+13],lastSecBytes:(disk[so+i+14]<<8)|disk[so+i+15]});
+    }
+  }
+  return out;
+}
+function dskReadFile(disk,entry){
+  const gatOff=DSK_DIRTRACK*DSK_SPT*DSK_SECTOR+1*DSK_SECTOR;
+  let g=entry.firstGran; const buf=[]; let guard=0;
+  while(guard++<200){
+    const v=disk[gatOff+g], off=dskGranOffset(g);
+    if(v>=0xC0){ const used=v&0x3F; let take=used*DSK_SECTOR; if(entry.lastSecBytes>0&&used>0) take=(used-1)*DSK_SECTOR+entry.lastSecBytes; for(let k=0;k<take;k++) buf.push(disk[off+k]); break; }
+    else { for(let k=0;k<DSK_GRANB;k++) buf.push(disk[off+k]); g=v; }
+  }
+  return Uint8Array.from(buf);
+}
+/* Total/used/free granules on a 35-track RS-DOS disk (68 granules total). */
+function dskUsage(disk){
+  const gatOff=DSK_DIRTRACK*DSK_SPT*DSK_SECTOR+1*DSK_SECTOR;
+  let used=0; const total=68;
+  for(let g=0;g<total;g++){ if(disk[gatOff+g]!==0xFF) used++; }
+  return {total, used, free:total-used, granBytes:DSK_GRANB};
+}
+/* Decode a disk file's raw bytes into either a PMODE-4 page (CoCo Max .MAX/.BIN)
+   or an indexed CoCo3 image (MGE/HRS/CM3/RAT/VEF). Returns {kind,page|img}. */
+function decodeDiskFile(name, ext, bytes){
+  const e=(ext||'').toUpperCase();
+  if(['MGE','HRS','CM3','RAT','VEF'].includes(e)){
+    const img=decodeCoco3(name+'.'+e, bytes); if(img) return {kind:'img', img};
+  }
+  // CoCo Max II ".MAC" native format: a title header then a compressed screen
+  // marked by the "PNTGMPNT" signature. The compression scheme is proprietary
+  // and not reliably documented, so flag it rather than render noise.
+  if(e==='MAC' || isMacFile(bytes)) return {kind:'mac'};
+  // MAX / BIN and anything LOADM-wrapped -> PMODE 4 page
+  if(bytes[0]===0x00 && (bytes[1]===0x18 || (bytes[1]===0x48))){   // 0x1800=6144 or 0x4800
+    try{ const r=readLoadm(bytes); return {kind:'page', page:r.page}; }catch(_){}
+  }
+  if(bytes[0]===0x00){
+    try{ const r=readLoadm(bytes); if(r.page) return {kind:'page', page:r.page}; }catch(_){}
+  }
+  // raw 6144 page
+  if(bytes.length>=PAGE_BYTES) return {kind:'page', page:bytes.slice(0,PAGE_BYTES)};
+  return null;
+}
+/* Detect the CoCo Max II MAC signature "PNTGMPNT" within the header region. */
+function isMacFile(bytes){
+  const sig=[0x50,0x4E,0x54,0x47,0x4D,0x50,0x4E,0x54];
+  const lim=Math.min(bytes.length-8, 80);
+  for(let o=0;o<lim;o++){
+    let ok=true; for(let k=0;k<8;k++){ if(bytes[o+k]!==sig[k]){ok=false;break;} }
+    if(ok) return true;
+  }
+  return false;
+}
+/* Build a fresh disk image from an array of {name,ext,bytes}. */
+function rebuildDsk(files){ return makeDsk(files.map(f=>({name:f.name,ext:f.ext,bytes:f.bytes,ftype:f.ftype,ascii:f.ascii}))); }
+
+/* Generate a CoCo Disk BASIC loader (ASCII format) that loads a PMODE 4 image
+   and displays it. Stored as ASCII BASIC (type 0, ascii flag 0xFF), which
+   RS-DOS LOADs and RUNs. Uses the same base name as the binary it loads. */
+function makeBasicLoader(binName){
+  const nm=binName.toUpperCase().slice(0,8);
+  const prog =
+    '10 PMODE4,1\r'+
+    '20 PCLS\r'+
+    '30 SCREEN1,1\r'+
+    '40 LOADM"'+nm+'"\r'+
+    '50 GOTO50\r';
+  const bytes=new Uint8Array(prog.length);
+  for(let i=0;i<prog.length;i++) bytes[i]=prog.charCodeAt(i)&0xFF;
+  return bytes;
+}
+
+/* ===================== ASM / BIN / RLE export ===================== */
+function pageToAsm(page,name){
+  let s=`* ${name} - PMODE 4 screen (256x192, 6144 bytes)\n`;
+  s+=`        ORG $0E00\n`;
+  for(let y=0;y<H;y++){
+    for(let bx=0;bx<BPR;bx+=8){
+      const row=[]; for(let k=0;k<8;k++) row.push('$'+page[y*BPR+bx+k].toString(16).toUpperCase().padStart(2,'0'));
+      s+=`        FCB ${row.join(',')}\n`;
+    }
+  }
+  return s;
+}
+function pageToRLE(page){
+  // simple RLE: count,value byte pairs over the raw page
+  const out=[]; let i=0;
+  while(i<page.length){ let v=page[i],n=1; while(i+n<page.length && page[i+n]===v && n<255) n++; out.push(n,v); i+=n; }
+  return Uint8Array.from(out);
+}
+
+/* ===================== JSON project (layers) ===================== */
+function bmpToB64(u8){ let s=''; for(let i=0;i<u8.length;i++) s+=String.fromCharCode(u8[i]); return btoa(s); }
+function b64ToBmp(b64){ const s=atob(b64); const u=new Uint8Array(s.length); for(let i=0;i<s.length;i++) u[i]=s.charCodeAt(i); return u; }
+function projectToJSON(title){
+  return JSON.stringify({
+    app:'CoCo Max Online', version:1, w:W, h:H, title:title||'untitled',
+    cssBit, dispMode, activeLayer,
+    layers: layers.map(L=>({ name:L.name, visible:L.visible, bmp:bmpToB64(L.bmp), mask:bmpToB64(L.mask) }))
+  });
+}
+function projectFromJSON(text){
+  const j=JSON.parse(text);
+  layers = j.layers.map(o=>({ id:layerSeq++, name:o.name, visible:o.visible, bmp:b64ToBmp(o.bmp), mask:b64ToBmp(o.mask) }));
+  activeLayer=Math.min(j.activeLayer||0, layers.length-1);
+  cssBit=j.cssBit||0; dispMode=j.dispMode||'composite';
+  return j.title||'untitled';
+}
+
+/* ===================== Tools & drawing interaction ===================== */
+let tool='pencil';
+let gridOn=false, snapGrid=false, gridW=8, gridH=8;
+let rulersOn=false, RULER_H=64, RULER_V=48;   /* ruler ticks: 64px horiz, 48px vert */
+let fatBits=false, fbCols=32, fbRows=24, fbOX=0, fbOY=0;
+let selRect=null;            // {x0,y0,x1,y1} in bitmap coords
+let selFloat=null;           // floating selection {x,y,w,h,bmp,mask}
+let antsPhase=0;
+
+const TOOLS=[
+ ['lasso','marquee'],['hand','text'],['bucket','spray'],['brush','pencil'],
+ ['line','eraser'],['rect','rectf'],['rrect','rrectf'],['oval','ovalf'],
+ ['free','freef'],['poly','polyf'],
+ ['dropper','wand'],['crop','resize']
+];
+
+function normRect(r){return {x0:Math.min(r.x0,r.x1),y0:Math.min(r.y0,r.y1),x1:Math.max(r.x0,r.x1),y1:Math.max(r.y0,r.y1)};}
+function snap(v,step){ return snapGrid? Math.round(v/step)*step : v; }
+
+let undoStack=[], redoStack=[];
+function snapshotLayers(){ return layers.map(L=>({name:L.name,visible:L.visible,bmp:L.bmp.slice(),mask:L.mask.slice(),id:L.id})); }
+function pushUndo(){
+  undoStack.push(snapshotLayers());
+  if(undoStack.length>30) undoStack.shift();
+  redoStack=[];                 // any new edit invalidates redo
+  updateEditMenu&&updateEditMenu();
+}
+function doUndo(){
+  if(!undoStack.length) return;
+  redoStack.push(snapshotLayers());
+  layers=undoStack.pop(); if(activeLayer>=layers.length) activeLayer=layers.length-1;
+  buildLayerList(); render(); updateEditMenu&&updateEditMenu();
+}
+function doRedo(){
+  if(!redoStack.length) return;
+  undoStack.push(snapshotLayers());
+  layers=redoStack.pop(); if(activeLayer>=layers.length) activeLayer=layers.length-1;
+  buildLayerList(); render(); updateEditMenu&&updateEditMenu();
+}
+
+function line(x0,y0,x1,y1,thick){
+  x0=Math.round(x0);y0=Math.round(y0);x1=Math.round(x1);y1=Math.round(y1);
+  let dx=Math.abs(x1-x0),dy=Math.abs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1,err=dx-dy;
+  while(true){ thick?plotThick(x0,y0):plot(x0,y0); if(x0===x1&&y0===y1)break; const e2=2*err; if(e2>-dy){err-=dy;x0+=sx;} if(e2<dx){err+=dx;y0+=sy;} }
+}
+function rectShape(x0,y0,x1,y1,fill){
+  const r=normRect({x0,y0,x1,y1});
+  if(fill){ for(let y=r.y0;y<=r.y1;y++)for(let x=r.x0;x<=r.x1;x++)plot(x,y); }
+  else { line(r.x0,r.y0,r.x1,r.y0,true);line(r.x0,r.y1,r.x1,r.y1,true);line(r.x0,r.y0,r.x0,r.y1,true);line(r.x1,r.y0,r.x1,r.y1,true); }
+}
+function rrectShape(x0,y0,x1,y1,fill){
+  const r=normRect({x0,y0,x1,y1}); const rad=Math.min(8,(r.x1-r.x0)>>1,(r.y1-r.y0)>>1);
+  if(fill){ for(let y=r.y0;y<=r.y1;y++)for(let x=r.x0;x<=r.x1;x++){ if(inCorner(x,y,r,rad))continue; plot(x,y);} }
+  else { for(let x=r.x0+rad;x<=r.x1-rad;x++){plot(x,r.y0);plot(x,r.y1);} for(let y=r.y0+rad;y<=r.y1-rad;y++){plot(r.x0,y);plot(r.x1,y);} quarter(r.x0+rad,r.y0+rad,rad,2);quarter(r.x1-rad,r.y0+rad,rad,1);quarter(r.x0+rad,r.y1-rad,rad,3);quarter(r.x1-rad,r.y1-rad,rad,0);}
+}
+function inCorner(x,y,r,rad){
+  const cs=[[r.x0+rad,r.y0+rad],[r.x1-rad,r.y0+rad],[r.x0+rad,r.y1-rad],[r.x1-rad,r.y1-rad]];
+  for(const[cx,cy] of cs){ const inX=(cx<=r.x0+rad)?x<cx:x>cx; const inY=(cy<=r.y0+rad)?y<cy:y>cy; if(inX&&inY&&((x-cx)**2+(y-cy)**2>rad*rad)) return true; }
+  return false;
+}
+function quarter(cx,cy,rad,q){ for(let a=0;a<=90;a++){const rad2=a*Math.PI/180;let x=Math.round(cx+Math.cos(rad2)*rad*(q==1||q==0?1:-1));let y=Math.round(cy+Math.sin(rad2)*rad*(q>=2?1:-1));plot(x,y);} }
+function ellipseShape(cx,cy,rx,ry,fill){
+  rx=Math.abs(rx);ry=Math.abs(ry); if(rx<1)rx=1; if(ry<1)ry=1;
+  if(fill){ for(let y=-ry;y<=ry;y++)for(let x=-rx;x<=rx;x++){ if((x*x)/(rx*rx)+(y*y)/(ry*ry)<=1) plot(Math.round(cx+x),Math.round(cy+y)); } }
+  else { for(let a=0;a<360;a+=1){const t=a*Math.PI/180; plot(Math.round(cx+Math.cos(t)*rx),Math.round(cy+Math.sin(t)*ry));} }
+}
+function floodFill(sx,sy){
+  sx=Math.round(sx);sy=Math.round(sy); if(!inb(sx,sy))return;
+  const L=curLayer();
+  const target=L.mask[sy*W+sx]?L.bmp[sy*W+sx]:2;  // 2 = "transparent" target
+  const stack=[[sx,sy]]; const seen=new Uint8Array(W*H);
+  while(stack.length){
+    const [x,y]=stack.pop(); if(!inb(x,y))continue; const i=y*W+x; if(seen[i])continue; seen[i]=1;
+    const cur=L.mask[i]?L.bmp[i]:2; if(cur!==target)continue;
+    setLayerPx(x,y,patBit(x,y));
+    stack.push([x+1,y],[x-1,y],[x,y+1],[x,y-1]);
+  }
+}
+function spray(x,y){ const r=6,n=14; for(let i=0;i<n;i++){const a=Math.random()*Math.PI*2,d=Math.random()*r;if(Math.random()<.6)plot(Math.round(x+Math.cos(a)*d),Math.round(y+Math.sin(a)*d));} }
+
+/* ---------- selection (marching ants) ---------- */
+function liftSelection(){
+  if(!selRect) return;
+  const r=normRect(selRect); const w=r.x1-r.x0+1,h=r.y1-r.y0+1;
+  const bmp=new Uint8Array(w*h), mask=new Uint8Array(w*h); const L=curLayer();
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){ const i=(r.y0+y)*W+(r.x0+x); bmp[y*w+x]=L.bmp[i]; mask[y*w+x]=L.mask[i]; }
+  selFloat={x:r.x0,y:r.y0,w,h,bmp,mask};
+}
+function stampFloat(){
+  if(!selFloat) return; const L=curLayer(); const f=selFloat;
+  for(let y=0;y<f.h;y++)for(let x=0;x<f.w;x++){ if(!f.mask[y*f.w+x])continue; const X=f.x+x,Y=f.y+y; if(inb(X,Y)){const i=Y*W+X; L.bmp[i]=f.bmp[y*f.w+x]; L.mask[i]=1;} }
+}
+function clearSelectionArea(){
+  const L=curLayer();
+  if(selMask){ for(let i=0;i<W*H;i++) if(selMask[i]){ L.bmp[i]=0; L.mask[i]=0; } return; }
+  if(!selRect)return; const r=normRect(selRect);
+  for(let y=r.y0;y<=r.y1;y++)for(let x=r.x0;x<=r.x1;x++){const i=y*W+x; L.bmp[i]=0; L.mask[i]=0;}
+}
+let clipboard=null;
+function doCopy(){ if(selRect){ liftSelection(); clipboard={...selFloat, bmp:selFloat.bmp.slice(), mask:selFloat.mask.slice()}; selFloat=null; } }
+function doCut(){ if(selRect){ pushUndo(); liftSelection(); clipboard={...selFloat, bmp:selFloat.bmp.slice(), mask:selFloat.mask.slice()}; clearSelectionArea(); selFloat=null; selRect=null; render(); } }
+function doPaste(){ if(clipboard){ pushUndo(); selFloat={...clipboard, x:8, y:8, bmp:clipboard.bmp.slice(), mask:clipboard.mask.slice()}; selRect={x0:8,y0:8,x1:8+clipboard.w-1,y1:8+clipboard.h-1}; stampFloat(); render(); } }
+
+/* ---------- new tools: eyedropper, magic wand, crop, resize ---------- */
+let cropMode=false;
+let selMask=null;   // optional per-pixel selection mask (Uint8Array W*H) for wand/inverse
+
+/* Eyedropper: sample the 8x8 tile around the cursor on the active layer and
+   match it to the closest palette pattern, making that the current pattern. */
+function pickPattern(x,y){
+  const L=curLayer();
+  const ox=(x>>3)<<3, oy=(y>>3)<<3;
+  const tile=[];
+  for(let r=0;r<8;r++){
+    let b=0;
+    for(let c=0;c<8;c++){ const X=ox+c,Y=oy+r; const lit=inb(X,Y)&&L.mask[Y*W+X]?L.bmp[Y*W+X]:1; if(lit) b|=(1<<(7-c)); }
+    tile.push(b);
+  }
+  // find exact or closest palette match
+  let best=0,bd=1e9;
+  for(let i=0;i<PALETTE.length;i++){
+    let d=0; for(let r=0;r<8;r++){ let x1=tile[r],x2=PALETTE[i][r]; let xo=x1^x2; while(xo){d+=xo&1;xo>>=1;} }
+    if(d<bd){bd=d;best=i;}
+  }
+  curPatternIndex=best; curPattern=PALETTE[best].slice(); buildPalette(); drawCurPat();
+}
+
+/* Magic wand: flood-select all contiguous pixels of the same lit-value as the
+   clicked pixel, producing a per-pixel selection mask + bounding selRect. */
+function magicWand(sx,sy,add){
+  sx=Math.round(sx); sy=Math.round(sy); if(!inb(sx,sy)) return;
+  const L=curLayer();
+  const val=L.mask[sy*W+sx]?L.bmp[sy*W+sx]:2;
+  const m=add&&selMask?selMask:new Uint8Array(W*H);
+  const stack=[[sx,sy]]; const seen=new Uint8Array(W*H);
+  let minx=sx,maxx=sx,miny=sy,maxy=sy,hit=0;
+  while(stack.length){
+    const [x,y]=stack.pop(); if(!inb(x,y))continue; const i=y*W+x; if(seen[i])continue; seen[i]=1;
+    const cur=L.mask[i]?L.bmp[i]:2; if(cur!==val) continue;
+    m[i]=1; hit++; if(x<minx)minx=x;if(x>maxx)maxx=x;if(y<miny)miny=y;if(y>maxy)maxy=y;
+    stack.push([x+1,y],[x-1,y],[x,y+1],[x,y-1]);
+  }
+  if(hit){ selMask=m; selRect={x0:minx,y0:miny,x1:maxx,y1:maxy}; }
+  updateEditMenu(); render();
+}
+
+/* Crop: keep only the selected rectangle, shifting it to the top-left and
+   clearing everything outside. Image stays 256x192 (CoCo page) but content
+   is cropped+repositioned. */
+function applyCrop(){
+  pushUndo();
+  const r=normRect(selRect);
+  layers.forEach(L=>{
+    const nb=new Uint8Array(W*H), nm=new Uint8Array(W*H);
+    for(let y=r.y0;y<=r.y1;y++)for(let x=r.x0;x<=r.x1;x++){
+      const si=y*W+x, dx=x-r.x0, dy=y-r.y0, di=dy*W+dx;
+      nb[di]=L.bmp[si]; nm[di]=L.mask[si];
+    }
+    L.bmp=nb; L.mask=nm;
+  });
+  selRect=null; selMask=null;
+  render();
+}
+
+/* selection invert / deselect (rectangle or mask based) */
+function invertSelection(){
+  const m=new Uint8Array(W*H);
+  if(selMask){ for(let i=0;i<W*H;i++) m[i]=selMask[i]?0:1; }
+  else if(selRect){ const r=normRect(selRect); for(let y=0;y<H;y++)for(let x=0;x<W;x++){ const inside=(x>=r.x0&&x<=r.x1&&y>=r.y0&&y<=r.y1); m[y*W+x]=inside?0:1; } }
+  else { return; }
+  selMask=m;
+  // bounding box of mask
+  let minx=W,maxx=-1,miny=H,maxy=-1;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++) if(m[y*W+x]){ if(x<minx)minx=x;if(x>maxx)maxx=x;if(y<miny)miny=y;if(y>maxy)maxy=y; }
+  selRect=(maxx>=0)?{x0:minx,y0:miny,x1:maxx,y1:maxy}:null;
+  updateEditMenu(); render();
+}
+function deselect(){ selRect=null; selMask=null; selFloat=null; updateEditMenu(); render(); }
+
+function drawSelOverlay(){
+  const octx2=overlay.getContext('2d'); octx2.clearRect(0,0,overlay.width,overlay.height);
+  if(selMask){
+    // draw marching-ants along mask boundary pixels
+    octx2.save();
+    const dash=(antsPhase>>1)&1;
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+      if(!selMask[y*W+x]) continue;
+      const edge = (x===0||!selMask[y*W+x-1])||(x===W-1||!selMask[y*W+x+1])||(y===0||!selMask[(y-1)*W+x])||(y===H-1||!selMask[(y+1)*W+x]);
+      if(edge){ octx2.fillStyle=((x+y+dash)&1)?'#000':'#fff'; octx2.fillRect(x*SCALE,y*SCALE,SCALE,SCALE); }
+    }
+    octx2.restore();
+    return;
+  }
+  if(!selRect) return;
+  const r=normRect(selRect);
+  octx2.save();
+  octx2.lineWidth=1; octx2.setLineDash([4,4]); octx2.lineDashOffset=-antsPhase;
+  const x=r.x0*SCALE+.5, y=r.y0*SCALE+.5, w=(r.x1-r.x0+1)*SCALE-1, h=(r.y1-r.y0+1)*SCALE-1;
+  octx2.strokeStyle='#000'; octx2.strokeRect(x,y,w,h);
+  octx2.strokeStyle='#fff'; octx2.lineDashOffset=-antsPhase+4; octx2.strokeRect(x,y,w,h);
+  octx2.restore();
+}
+
+/* ---------- grid & fat bits overlays ---------- */
+function drawRulers(){
+  // Guide lines at every RULER_H (64) px horizontally and RULER_V (48) px vertically,
+  // plus tick labels along the top and left edges.
+  ctx.save();
+  ctx.strokeStyle='rgba(232,120,28,.55)'; ctx.lineWidth=1;
+  ctx.fillStyle='rgba(0,0,0,.85)'; ctx.font='9px monospace';
+  for(let x=0;x<=W;x+=RULER_H){
+    ctx.beginPath(); ctx.moveTo(x*SCALE+.5,0); ctx.lineTo(x*SCALE+.5,H*SCALE); ctx.stroke();
+    if(x<W){ ctx.fillStyle='#fff'; ctx.fillRect(x*SCALE+1,0,18,10); ctx.fillStyle='#000'; ctx.fillText(String(x),x*SCALE+2,8); }
+  }
+  ctx.strokeStyle='rgba(40,70,210,.55)';
+  for(let y=0;y<=H;y+=RULER_V){
+    ctx.beginPath(); ctx.moveTo(0,y*SCALE+.5); ctx.lineTo(W*SCALE,y*SCALE+.5); ctx.stroke();
+    if(y<H){ ctx.fillStyle='#fff'; ctx.fillRect(0,y*SCALE+1,18,10); ctx.fillStyle='#000'; ctx.fillText(String(y),2,y*SCALE+9); }
+  }
+  ctx.restore();
+}
+function drawGridOverlay(){
+  ctx.save(); ctx.strokeStyle='rgba(80,120,255,.35)'; ctx.lineWidth=1;
+  for(let x=0;x<=W;x+=gridW){ctx.beginPath();ctx.moveTo(x*SCALE+.5,0);ctx.lineTo(x*SCALE+.5,H*SCALE);ctx.stroke();}
+  for(let y=0;y<=H;y+=gridH){ctx.beginPath();ctx.moveTo(0,y*SCALE+.5);ctx.lineTo(W*SCALE,y*SCALE+.5);ctx.stroke();}
+  ctx.restore();
+}
+function renderFatBits(){
+  const page=composite();
+  const zx=cv.width/fbCols, zy=cv.height/fbRows;
+  ctx.save();
+  for(let r=0;r<fbRows;r++)for(let c=0;c<fbCols;c++){
+    const X=fbOX+c,Y=fbOY+r; if(!inb(X,Y))continue;
+    const lit=page[Y*W+X];
+    ctx.fillStyle=lit?'#fff':'#000'; ctx.fillRect(c*zx,r*zy,zx,zy);
+    // parity tint
+    const odd=(X&1)===1;
+    ctx.fillStyle=odd?'rgba(40,70,210,.30)':'rgba(232,120,28,.30)';
+    ctx.fillRect(c*zx,r*zy,zx,zy);
+    ctx.strokeStyle='rgba(0,0,0,.25)'; ctx.strokeRect(c*zx,r*zy,zx,zy);
+  }
+  ctx.restore();
+}
+
+/* ---------- coordinate mapping ---------- */
+function evPos(e){
+  const rect=cv.getBoundingClientRect();
+  let px=(e.clientX-rect.left)*(cv.width/rect.width);
+  let py=(e.clientY-rect.top)*(cv.height/rect.height);
+  if(fatBits){ const zx=cv.width/fbCols,zy=cv.height/fbRows; return {x:fbOX+Math.floor(px/zx), y:fbOY+Math.floor(py/zy)}; }
+  return {x:Math.floor(px/SCALE), y:Math.floor(py/SCALE)};
+}
+
+/* ---------- text tool ---------- */
+const textEntry=document.getElementById('textentry');
+const textInput=document.getElementById('textinput');
+let textPos=null;
+let textStyle={bold:false,italic:false,underline:false,outline:false,shadow:false,align:'left'};
+function startTextAt(x,y){
+  textPos={x,y};
+  const fpx=16;
+  textInput.style.fontSize=(fpx*SCALE/2)+'px';
+  textInput.style.fontWeight=textStyle.bold?'900':'700';
+  textInput.style.fontStyle=textStyle.italic?'italic':'normal';
+  textInput.value='';
+  textEntry.style.display='block';
+  textEntry.style.left=(x*SCALE)+'px';
+  textEntry.style.top=(y*SCALE-fpx*SCALE/2)+'px';
+  setTimeout(()=>textInput.focus(),10);
+}
+function commitText(){
+  if(textPos && textInput.value){ pushUndo(); drawText(textInput.value, textPos.x, textPos.y); render(); }
+  textEntry.style.display='none'; textPos=null;
+}
+function drawText(str,x,y){
+  // Render with an offscreen canvas at 1:1, threshold to 1bpp, stamp via pattern.
+  const tc=document.createElement('canvas'); tc.width=W; tc.height=H;
+  const tcx=tc.getContext('2d');
+  const f=FONTS[curFont]||FONTS[0];
+  const fpx=f.px||16; let style=''; if(textStyle.italic)style+='italic '; if(textStyle.bold)style+='bold ';
+  tcx.font=style+fpx+'px '+f.css;
+  tcx.textBaseline='alphabetic'; tcx.fillStyle='#000';
+  let tx=x; if(textStyle.align==='middle'){const w=tcx.measureText(str).width; tx=x-w/2;} if(textStyle.align==='right'){const w=tcx.measureText(str).width; tx=x-w;}
+  if(textStyle.outline){ tcx.lineWidth=1; tcx.strokeStyle='#000'; tcx.strokeText(str,tx,y); }
+  else { if(textStyle.shadow){ tcx.fillText(str,tx+1,y+1); } tcx.fillText(str,tx,y); }
+  if(textStyle.underline){ const w=tcx.measureText(str).width; tcx.fillRect(tx,y+2,w,1); }
+  const id=tcx.getImageData(0,0,W,H).data;
+  for(let yy=0;yy<H;yy++)for(let xx=0;xx<W;xx++){
+    const a=id[(yy*W+xx)*4+3]; if(a>80){ setLayerPx(xx,yy, patBit(xx,yy)); }
+  }
+}
+
+/* ---------- pointer handlers ---------- */
+let drawing=false, start=null, last=null, movingSel=false, moveOff=null, previewBuf=null;
+function saveActiveSnapshot(){ const L=curLayer(); return {bmp:L.bmp.slice(),mask:L.mask.slice()}; }
+function restoreSnapshot(s){ const L=curLayer(); L.bmp.set(s.bmp); L.mask.set(s.mask); }
+
+cv.addEventListener('pointerdown',e=>{
+  cv.setPointerCapture(e.pointerId);
+  const p=evPos(e); start=last={x:snap(p.x,gridW),y:snap(p.y,gridH)};
+  drawMode=(e.button===2||e.shiftKey)?'erase':'paint';
+
+  if(tool==='text'){ startTextAt(p.x,p.y); return; }
+  if(tool==='hand'){ return; }
+  if(tool==='dropper'){ pickPattern(p.x,p.y); return; }
+  if(tool==='wand'){ magicWand(p.x,p.y, e.shiftKey); return; }
+  if(tool==='crop'){ selRect={x0:p.x,y0:p.y,x1:p.x,y1:p.y}; drawing=true; cropMode=true; return; }
+  if(tool==='resize'){ showResizeDialog(); return; }
+
+  // selection move: if click inside an existing float, drag it
+  if((tool==='marquee'||tool==='lasso') && selFloat){
+    const f=selFloat;
+    if(p.x>=f.x&&p.x<f.x+f.w&&p.y>=f.y&&p.y<f.y+f.h){ movingSel=true; moveOff={dx:p.x-f.x,dy:p.y-f.y}; previewBuf=saveActiveSnapshot(); return; }
+    // clicking outside drops the float
+    selFloat=null; selRect=null;
+  }
+
+  pushUndo();
+  if(tool==='marquee'||tool==='lasso'){ selRect={x0:p.x,y0:p.y,x1:p.x,y1:p.y}; drawing=true; return; }
+  if(tool==='bucket'){ floodFill(p.x,p.y); render(); drawing=false; return; }
+  if(tool==='spray'){ drawing=true; spray(p.x,p.y); render(); return; }
+  if(tool==='pencil'){ drawing=true; plotThick(p.x,p.y); render(); return; }
+  if(tool==='brush'){ drawing=true; plotThick(p.x,p.y); render(); return; }
+  if(tool==='eraser'){ drawing=true; drawMode='erase'; plotThick(p.x,p.y); render(); return; }
+  // shape tools: take a snapshot for live preview
+  if(['line','rect','rectf','rrect','rrectf','oval','ovalf','free','freef','poly','polyf'].includes(tool)){
+    drawing=true; previewBuf=saveActiveSnapshot(); return;
+  }
+});
+cv.addEventListener('pointermove',e=>{
+  const p=evPos(e); document.getElementById('coord').textContent=inb(p.x,p.y)?`${p.x},${p.y}`:'';
+  if(movingSel && selFloat){
+    restoreSnapshot(previewBuf);
+    selFloat.x=p.x-moveOff.dx; selFloat.y=p.y-moveOff.dy;
+    selRect={x0:selFloat.x,y0:selFloat.y,x1:selFloat.x+selFloat.w-1,y1:selFloat.y+selFloat.h-1};
+    stampFloat(); render(); return;
+  }
+  if(!drawing) return;
+  const q={x:snap(p.x,gridW),y:snap(p.y,gridH)};
+  if(tool==='pencil'||tool==='brush'||tool==='eraser'){ line(last.x,last.y,q.x,q.y,true); last=q; render(); return; }
+  if(tool==='spray'){ spray(p.x,p.y); render(); return; }
+  if(tool==='marquee'||tool==='lasso'){ selRect.x1=p.x; selRect.y1=p.y; render(); return; }
+  if(tool==='crop'){ selRect.x1=p.x; selRect.y1=p.y; render(); return; }
+  // shapes: restore + redraw preview
+  if(previewBuf){
+    restoreSnapshot(previewBuf);
+    const x0=start.x,y0=start.y,x1=q.x,y1=q.y;
+    if(tool==='line') line(x0,y0,x1,y1,lineWidth>1);
+    else if(tool==='rect') rectShape(x0,y0,x1,y1,false);
+    else if(tool==='rectf') rectShape(x0,y0,x1,y1,true);
+    else if(tool==='rrect') rrectShape(x0,y0,x1,y1,false);
+    else if(tool==='rrectf') rrectShape(x0,y0,x1,y1,true);
+    else if(tool==='oval') ellipseShape((x0+x1)/2,(y0+y1)/2,(x1-x0)/2,(y1-y0)/2,false);
+    else if(tool==='ovalf') ellipseShape((x0+x1)/2,(y0+y1)/2,(x1-x0)/2,(y1-y0)/2,true);
+    else if(tool==='free'||tool==='poly') line(x0,y0,x1,y1,true);
+    else if(tool==='freef'||tool==='polyf') rectShape(x0,y0,x1,y1,true);
+    render();
+  }
+});
+cv.addEventListener('pointerup',e=>{
+  if(movingSel){ movingSel=false; previewBuf=null; return; }
+  if(drawing && tool==='crop' && cropMode){ cropMode=false; drawing=false; if(selRect && Math.abs(selRect.x1-selRect.x0)>2 && Math.abs(selRect.y1-selRect.y0)>2){ applyCrop(); } render(); return; }
+  if(drawing && (tool==='marquee'||tool==='lasso')){ if(selRect && (Math.abs(selRect.x1-selRect.x0)<2||Math.abs(selRect.y1-selRect.y0)<2)) selRect=null; updateEditMenu(); }
+  drawing=false; previewBuf=null; render();
+});
+cv.addEventListener('contextmenu',e=>e.preventDefault());
+
+textInput.addEventListener('keydown',e=>{ if(e.key==='Enter')commitText(); if(e.key==='Escape'){textEntry.style.display='none';textPos=null;} });
+textInput.addEventListener('blur',commitText);
+
+/* marching ants animation */
+setInterval(()=>{ if(selRect||selMask){ antsPhase=(antsPhase+1)%8; drawSelOverlay(); } },90);
+
+/* ===================== UI construction ===================== */
+const ICON_TIP={lasso:'Lasso',marquee:'Selection',hand:'Grabber',text:'Text',bucket:'Paint Bucket',spray:'Spray Can',brush:'Paint Brush',pencil:'Pencil',line:'Line',eraser:'Eraser',rect:'Rectangle',rectf:'Filled Rectangle',rrect:'Rounded Rect',rrectf:'Filled Rounded Rect',oval:'Oval',ovalf:'Filled Oval',free:'Freehand',freef:'Filled Freehand',poly:'Polygon',polyf:'Filled Polygon',dropper:'Eyedropper (pick pattern)',wand:'Magic Wand (select similar)',crop:'Crop',resize:'Resize Image'};
+function buildToolbox(){
+  const grid=document.getElementById('toolgrid'); grid.innerHTML='';
+  TOOLS.flat().forEach(t=>{
+    const b=document.createElement('div'); b.className='toolbtn'+(t===tool?' active':''); b.dataset.tool=t; b.title=ICON_TIP[t];
+    const img=document.createElement('img'); img.src=ICON[t]; img.alt=t; b.appendChild(img);
+    b.onclick=()=>selectTool(t);
+    grid.appendChild(b);
+  });
+  // line width selector
+  const lw=document.getElementById('lwsel'); lw.innerHTML='';
+  [1,2,3,4,6].forEach(w=>{
+    const row=document.createElement('div'); row.className='lwrow'; row.onclick=()=>{lineWidth=w;buildToolbox();};
+    const chk=document.createElement('div'); chk.className='chk'; chk.textContent=(w===lineWidth?'✓':'');
+    const bar=document.createElement('div'); bar.className='bar'; bar.style.height=w+'px';
+    row.appendChild(chk); row.appendChild(bar); lw.appendChild(row);
+  });
+}
+function selectTool(t){
+  if((tool==='marquee'||tool==='lasso') && selFloat){ selFloat=null; }
+  tool=t;
+  buildToolbox();
+  cv.style.cursor = (t==='text')?'text' : (t==='hand')?'grab' : (t==='dropper')?'cell' : (t==='crop')?'crosshair' : 'crosshair';
+}
+
+/* pattern tile -> data URL for swatch display */
+function tileURL(tile,scale){
+  scale=scale||3; const c=document.createElement('canvas'); c.width=8*scale;c.height=8*scale; const x=c.getContext('2d');
+  x.imageSmoothingEnabled=false;
+  // render the 8x8 tile twice as wide tiled, so fringe has horizontal context,
+  // then we sample the middle 8 columns. Build a 16-wide strip.
+  const SW=16, SH=8;
+  const id=x.createImageData(SW,SH);
+  for(let yy=0;yy<SH;yy++)for(let xx=0;xx<SW;xx+=2){
+    const tx=xx%8;
+    const hi=(tile[yy]>>(7-tx))&1, lo=(tile[yy]>>(7-((tx+1)%8)))&1;
+    let col; if(hi&&lo)col=COL.white; else if(hi&&!lo)col=COL.blue; else if(!hi&&lo)col=COL.orange; else col=COL.black;
+    for(const cx of [xx,xx+1]){const i=(yy*SW+cx)*4; id.data[i]=col[0];id.data[i+1]=col[1];id.data[i+2]=col[2];id.data[i+3]=255;}
+  }
+  if(ntscFringe) ntscProcess(id.data, SW, SH);
+  const t=document.createElement('canvas');t.width=SW;t.height=SH;t.getContext('2d').putImageData(id,0,0);
+  // draw the middle 8 columns scaled up (avoids edge wrap artifacts)
+  x.drawImage(t, 4,0, 8,8, 0,0, 8*scale,8*scale);
+  return c.toDataURL();
+}
+function buildPalette(){
+  const grid=document.getElementById('patgrid'); grid.innerHTML='';
+  // The PALETTE is in column-major ID order (IDs 1-4 = column 1 rows 1-4).
+  // CSS grid-auto-flow:column with 4 rows reproduces that 16x4 layout.
+  PALETTE.forEach((tile,i)=>{
+    const d=document.createElement('div'); d.className='patcell'+(i===curPatternIndex?' active':'');
+    d.style.backgroundImage=`url(${tileURL(tile,3)})`; d.style.backgroundSize='cover';
+    d.title=PAT_NAMES[i]||('Pattern '+(i+1));
+    d.onclick=()=>{ curPatternIndex=i; curPattern=tile.slice(); buildPalette(); drawCurPat(); };
+    grid.appendChild(d);
+  });
+}
+function drawCurPat(){
+  const c=document.getElementById('curpat'); const x=c.getContext('2d'); x.imageSmoothingEnabled=false;
+  const img=new Image(); img.onload=()=>{x.clearRect(0,0,48,48);x.drawImage(img,0,0,48,48);}; img.src=tileURL(curPattern,6);
+}
+
+/* ===================== Layers panel ===================== */
+let thumbTimer=null;
+function scheduleThumbs(){ if(thumbTimer)return; thumbTimer=setTimeout(()=>{thumbTimer=null;updateLayerThumbs();},120); }
+function layerThumbURL(L){
+  const c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d');
+  const id=x.createImageData(W,H);
+  for(let y=0;y<H;y++)for(let xx=0;xx<W;xx+=2){
+    const i=y*W+xx; const hi=L.mask[i]?L.bmp[i]:0, lo=L.mask[i+1]?L.bmp[i+1]:0;
+    let col; if(!L.mask[i]&&!L.mask[i+1]) col=[200,200,210];
+    else if(hi&&lo)col=COL.white; else if(hi&&!lo)col=COL.blue; else if(!hi&&lo)col=COL.orange; else col=COL.black;
+    for(const cx of [xx,xx+1]){const j=(y*W+cx)*4; id.data[j]=col[0];id.data[j+1]=col[1];id.data[j+2]=col[2];id.data[j+3]=255;}
+  }
+  c.getContext('2d').putImageData(id,0,0);
+  const t=document.createElement('canvas');t.width=42;t.height=32;const tx=t.getContext('2d');tx.imageSmoothingEnabled=false;tx.drawImage(c,0,0,42,32);
+  return t.toDataURL();
+}
+function updateLayerThumbs(){ document.querySelectorAll('.layeritem').forEach(el=>{const li=+el.dataset.li; if(layers[li]) el.querySelector('.lthumb').src=layerThumbURL(layers[li]);}); }
+function buildLayerList(){
+  const list=document.getElementById('layerlist'); list.innerHTML='';
+  for(let li=layers.length-1; li>=0; li--){
+    const L=layers[li];
+    const el=document.createElement('div'); el.className='layeritem'+(li===activeLayer?' active':''); el.dataset.li=li; el.draggable=true;
+    const eye=document.createElement('div'); eye.className='eye'; eye.textContent=L.visible?'👁':'—'; eye.onclick=(ev)=>{ev.stopPropagation();L.visible=!L.visible;buildLayerList();render();};
+    const th=document.createElement('img'); th.className='lthumb'; th.src=layerThumbURL(L);
+    const nm=document.createElement('div'); nm.className='lname'; nm.textContent=L.name; nm.title='Double-click to rename';
+    nm.ondblclick=()=>{ nm.contentEditable=true; nm.focus(); document.execCommand&&document.getSelection().selectAllChildren(nm); };
+    nm.onblur=()=>{ nm.contentEditable=false; L.name=nm.textContent.trim()||L.name; };
+    nm.onkeydown=(ev)=>{ if(ev.key==='Enter'){ev.preventDefault();nm.blur();} };
+    el.onclick=()=>{ activeLayer=li; buildLayerList(); };
+    el.appendChild(eye); el.appendChild(th); el.appendChild(nm);
+    // drag reorder
+    el.ondragstart=(ev)=>{ ev.dataTransfer.setData('text/plain', li); };
+    el.ondragover=(ev)=>{ ev.preventDefault(); el.classList.add('dragover'); };
+    el.ondragleave=()=>el.classList.remove('dragover');
+    el.ondrop=(ev)=>{ ev.preventDefault(); el.classList.remove('dragover'); const from=+ev.dataTransfer.getData('text/plain'); reorderLayer(from,li); };
+    list.appendChild(el);
+  }
+}
+function reorderLayer(from,to){
+  if(from===to) return;
+  const [m]=layers.splice(from,1);
+  layers.splice(to,0,m);
+  activeLayer=to; buildLayerList(); render();
+}
+function addLayer(){ pushUndo(); layers.splice(activeLayer+1,0, makeLayer('Layer '+layerSeq, false)); activeLayer++; buildLayerList(); render(); }
+function dupLayer(){ pushUndo(); const L=curLayer(); layers.splice(activeLayer+1,0,{id:layerSeq++,name:L.name+' copy',visible:true,bmp:L.bmp.slice(),mask:L.mask.slice()}); activeLayer++; buildLayerList(); render(); }
+function delLayer(){ if(layers.length<=1)return; pushUndo(); layers.splice(activeLayer,1); if(activeLayer>=layers.length)activeLayer=layers.length-1; buildLayerList(); render(); }
+function mergeDown(){ if(activeLayer===0)return; pushUndo(); const top=layers[activeLayer], bot=layers[activeLayer-1]; for(let i=0;i<W*H;i++){ if(top.mask[i]){ bot.bmp[i]=top.bmp[i]; bot.mask[i]=1; } } layers.splice(activeLayer,1); activeLayer--; buildLayerList(); render(); }
+
+/* ===================== Menus ===================== */
+const MENUS={
+ file:[
+   {l:'New', a:'new'},
+   {l:'Open…', a:'open', sc:'⌘O'},
+   {sep:1},
+   {l:'Save Project (JSON)…', a:'savejson'},
+   {l:'Save As…', a:'saveas', sc:'⌘S'},
+   {sep:1},
+   {l:'Create .DSK…', a:'createdsk'},
+   {l:'Mount / Browse .DSK…', a:'opendsk'},
+ ],
+ edit:[
+   {l:'Undo', a:'undo', sc:'⌘Z'},
+   {l:'Redo', a:'redo', sc:'⇧⌘Z'},
+   {sep:1},
+   {l:'Cut', a:'cut', sc:'⌘X'},
+   {l:'Copy', a:'copy', sc:'⌘C'},
+   {l:'Paste', a:'paste', sc:'⌘V'},
+   {l:'Clear', a:'clear'},
+   {sep:1},
+   {l:'Select All', a:'selall', sc:'⌘A'},
+   {l:'Invert Selection', a:'selinv', sc:'⇧⌘I'},
+   {l:'Deselect', a:'deselect', sc:'⌘D'},
+ ],
+ goodies:[
+   {l:'Grid', a:'grid'},
+   {l:'Rulers', a:'rulers'},
+   {l:'Fat Bits', a:'fatbits'},
+   {l:'Show Page', a:'showpage'},
+   {l:'Edit Pattern…', a:'editpat'},
+   {sep:1},
+   {l:'Resize Image…', a:'resize'},
+   {l:'Crop to Selection', a:'cropsel'},
+   {sep:1},
+   {l:'Invert', a:'invert'},
+   {l:'Fill Layer', a:'fill'},
+   {l:'Trace Edges', a:'trace', sc:'⌘E'},
+   {l:'Flip Horizontal', a:'fliph'},
+   {l:'Flip Vertical', a:'flipv'},
+   {l:'Rotate 180°', a:'rot'},
+   {sep:1},
+   {l:'Remap Colors…', a:'remap'},
+ ],
+};
+function buildMenu(id, items){
+  const dd=document.getElementById('m-'+id); dd.innerHTML='';
+  items.forEach(it=>{
+    if(it.sep){ const s=document.createElement('div'); s.className='mi sep'; dd.appendChild(s); return; }
+    const m=document.createElement('div'); m.className='mi';
+    if(it.a==='grid'&&gridOn) m.classList.add('check');
+    if(it.a==='rulers'&&rulersOn) m.classList.add('check');
+    if(it.a==='fatbits'&&fatBits) m.classList.add('check');
+    if(it.a==='undo'&&!undoStack.length) m.classList.add('disabled');
+    if(it.a==='redo'&&!redoStack.length) m.classList.add('disabled');
+    const lab=document.createElement('span'); lab.textContent=it.l; m.appendChild(lab);
+    if(it.sc){ const s=document.createElement('span'); s.className='sc'; s.textContent=it.sc; m.appendChild(s); }
+    m.onclick=()=>{ closeMenus(); doAction(it.a); };
+    dd.appendChild(m);
+  });
+}
+function buildFontMenu(){
+  const dd=document.getElementById('m-font'); dd.innerHTML='';
+  FONTS.forEach((f,idx)=>{
+    const m=document.createElement('div'); m.className='mi';
+    if(idx===curFont) m.classList.add('check');
+    const lab=document.createElement('span'); lab.textContent=f.name;
+    lab.style.fontFamily=f.css;          // preview each item in its own typeface
+    lab.style.fontSize='15px';
+    m.appendChild(lab);
+    m.onclick=()=>{ curFont=idx; closeMenus(); buildFontMenu(); };
+    dd.appendChild(m);
+  });
+}
+let curFont=0;
+function buildStyleMenu(){
+  const dd=document.getElementById('m-style'); dd.innerHTML='';
+  const toggles=[['Plain','plain','⌘P'],['Bold','bold','⌘B'],['Italic','italic','⌘I'],['Underline','underline','⌘U'],['Outline','outline','⌘O'],['Shadow','shadow','⌘S']];
+  toggles.forEach(([l,k,sc])=>{
+    const m=document.createElement('div'); m.className='mi';
+    const on=(k==='plain')?(!textStyle.bold&&!textStyle.italic&&!textStyle.underline&&!textStyle.outline&&!textStyle.shadow):textStyle[k];
+    if(on)m.classList.add('check');
+    const lab=document.createElement('span');lab.textContent=l;m.appendChild(lab);
+    const s=document.createElement('span');s.className='sc';s.textContent=sc;m.appendChild(s);
+    m.onclick=()=>{ if(k==='plain'){textStyle={bold:false,italic:false,underline:false,outline:false,shadow:false,align:textStyle.align};} else {textStyle[k]=!textStyle[k];} closeMenus(); buildStyleMenu(); };
+    dd.appendChild(m);
+  });
+  const sep=document.createElement('div');sep.className='mi sep';dd.appendChild(sep);
+  [['Align Left','left','⌘L'],['Align Middle','middle','⌘M'],['Align Right','right','⌘R']].forEach(([l,k,sc])=>{
+    const m=document.createElement('div');m.className='mi'; if(textStyle.align===k)m.classList.add('check');
+    const lab=document.createElement('span');lab.textContent=l;m.appendChild(lab);
+    const s=document.createElement('span');s.className='sc';s.textContent=sc;m.appendChild(s);
+    m.onclick=()=>{textStyle.align=k;closeMenus();buildStyleMenu();};
+    dd.appendChild(m);
+  });
+}
+function closeMenus(){ document.querySelectorAll('.menu.open').forEach(m=>m.classList.remove('open')); }
+function updateEditMenu(){ buildMenu('edit',MENUS.edit); }
+
+/* About menu (the ✿ at the far left) */
+function buildAboutMenu(){
+  const dd=document.getElementById('m-about'); dd.innerHTML='';
+  const m=document.createElement('div'); m.className='mi';
+  m.innerHTML='<span>About CoCo Max Online…</span>';
+  m.onclick=()=>{ closeMenus(); showAbout(); };
+  dd.appendChild(m);
+}
+function showAbout(){
+  showModal(`<div style="text-align:center;min-width:340px">
+    <div style="font-size:26px;font-weight:900;margin-bottom:2px">✿ CoCo Max Online</div>
+    <div style="font-size:12px;color:#444;margin-bottom:14px">A PMODE-4 artifact-color paint program<br>in the MacPaint idiom, for the TRS-80 Color Computer.</div>
+    <div style="border-top:1px dotted #000;border-bottom:1px dotted #000;padding:12px 0;margin:8px 0;font-size:13px;line-height:1.5">
+      © 2026 Carlos Camacho<br>All rights reserved.
+    </div>
+    <div style="font-size:11px;color:#666;margin-top:8px">Inspired by Colorware CoCo Max II / III and Apple MacPaint.</div>
+    </div>
+    <div class="row" style="justify-content:center"><button class="btn default" id="ok">OK</button></div>`);
+  document.getElementById('ok').onclick=closeModal;
+}
+
+/* Windows menu: toggle visibility of each floating palette/window. */
+const WINDOW_LIST=[
+  ['toolbox','Tools'],['patwin','Patterns'],['layerwin','Layers'],
+  ['docwin','Drawing'],['previewwin','Preview'],['diskwin','Disk Gallery']
+];
+function buildWindowsMenu(){
+  const dd=document.getElementById('m-windows'); dd.innerHTML='';
+  WINDOW_LIST.forEach(([id,label])=>{
+    const el=document.getElementById(id); if(!el) return;
+    const m=document.createElement('div'); m.className='mi';
+    const visible=!el.classList.contains('hidden');
+    if(visible) m.classList.add('check');
+    const lab=document.createElement('span'); lab.textContent=label; m.appendChild(lab);
+    m.onclick=()=>{
+      el.classList.toggle('hidden');
+      // bring to front and ensure on-screen when showing
+      if(!el.classList.contains('hidden')){ document.querySelectorAll('.win').forEach(w=>w.classList.remove('focused')); el.classList.add('focused'); }
+      closeMenus(); buildWindowsMenu();
+    };
+    dd.appendChild(m);
+  });
+  const sep=document.createElement('div'); sep.className='mi sep'; dd.appendChild(sep);
+  const reset=document.createElement('div'); reset.className='mi';
+  reset.innerHTML='<span>Reset Window Positions</span>';
+  reset.onclick=()=>{ resetWindowPositions(); closeMenus(); buildWindowsMenu(); };
+  dd.appendChild(reset);
+}
+function resetWindowPositions(){
+  const vw=window.innerWidth, vh=window.innerHeight;
+  const M=14;                       // margin from edges
+  const TOP=45;                     // below menu bar
+  // measure widths so we can right-align precisely
+  const layerW=250, diskW=430, prevW=260;   // approx widths (preview canvas 256 + chrome)
+  // Right-side stack: Layers, then Preview, then Disk Gallery — flush right,
+  // top to bottom, non-overlapping. Use a single right-edge column.
+  const rightW=Math.max(layerW, diskW, prevW);
+  const rightX=Math.max(300, vw - rightW - M);
+  document.getElementById('layerwin').style.cssText=`right:${M}px;top:${TOP}px;width:${layerW}px;left:auto;`;
+  // place preview and disk below layers; compute layers height after layout
+  const lw=document.getElementById('layerwin');
+  // toolbox top-left, document middle-left, patterns bottom-left
+  document.getElementById('toolbox').style.cssText=`left:${M}px;top:${TOP}px;`;
+  document.getElementById('docwin').style.cssText=`left:90px;top:${TOP}px;`;
+  document.getElementById('patwin').style.cssText=`left:90px;top:${Math.max(TOP+300, vh-150)}px;`;
+  // show the standard windows
+  ['toolbox','patwin','layerwin','docwin','previewwin'].forEach(id=>document.getElementById(id).classList.remove('hidden'));
+  // now stack preview + disk under layers using measured heights
+  requestAnimationFrame(()=>{
+    const lr=lw.getBoundingClientRect();
+    const prevTop=lr.bottom+10;
+    const pv=document.getElementById('previewwin');
+    pv.style.cssText=`right:${M}px;top:${Math.round(prevTop)}px;left:auto;`;
+    const dk=document.getElementById('diskwin');
+    requestAnimationFrame(()=>{
+      const pr=pv.getBoundingClientRect();
+      const diskTop=(dk.classList.contains('hidden'))?prevTop:pr.bottom+10;
+      dk.style.cssText=`right:${M}px;top:${Math.round(diskTop)}px;width:${diskW}px;left:auto;z-index:50;`;
+    });
+  });
+}
+
+document.querySelectorAll('.menu').forEach(menu=>{
+  menu.addEventListener('click',e=>{
+    const wasOpen=menu.classList.contains('open'); closeMenus(); if(!wasOpen) menu.classList.add('open'); e.stopPropagation();
+    // edge-aware: if dropdown would overflow the right edge, anchor it to the right
+    const dd=menu.querySelector('.dropdown');
+    if(dd){ dd.style.left='0'; dd.style.right='auto';
+      requestAnimationFrame(()=>{ const r=dd.getBoundingClientRect(); if(r.right>window.innerWidth-4){ dd.style.left='auto'; dd.style.right='0'; } });
+    }
+  });
+});
+document.addEventListener('click',()=>closeMenus());
+
+/* ===================== Dialog helpers ===================== */
+const modal=document.getElementById('modal'), dlg=document.getElementById('dlg');
+function showModal(html){ dlg.innerHTML=html; modal.style.display='flex'; }
+function closeModal(){ modal.style.display='none'; }
+function flash(msg){ showModal(`<h3>${msg}</h3><div class="row"><button class="btn default" id="ok">OK</button></div>`); document.getElementById('ok').onclick=closeModal; }
+modal.addEventListener('click',e=>{ if(e.target===modal) closeModal(); });
+
+function dl(blob,name){ const u=URL.createObjectURL(blob);const a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1500); }
+
+/* ===================== File actions ===================== */
+let docTitle='untitled';
+function setTitle(t){ docTitle=t; document.getElementById('doctitle').textContent=t; }
+
+function actionOpen(){ const fi=document.getElementById('fileinput'); fi.value=''; fi.accept='.png,.json,.max,.bin,.hrs,.mge,.cm3,.rat,.vef,.dsk'; fi.onchange=()=>{ if(fi.files[0]) handleOpenFile(fi.files[0]); }; fi.click(); }
+async function handleOpenFile(file){
+  const name=file.name, ext=(name.split('.').pop()||'').toLowerCase();
+  const buf=new Uint8Array(await file.arrayBuffer());
+  if(ext==='json'){ const t=projectFromJSON(new TextDecoder().decode(buf)); setTitle(t); sizeCanvas(); buildLayerList(); render(); flash('Project loaded: '+t); return; }
+  if(ext==='png'){ openPNG(file); return; }
+  if(ext==='max'||ext==='bin'){ const {page}=readLoadm(buf); pushUndo(); const L=makeLayer(name,false); const bm=pageToBmp(page); for(let i=0;i<bm.length;i++){L.bmp[i]=bm[i];L.mask[i]=1;} layers.push(L); activeLayer=layers.length-1; setTitle(name); buildLayerList(); render(); flash('Loaded '+name+' as PMODE 4 page'); return; }
+  if(ext==='dsk'){ browseDsk(buf, file.name); return; }
+  if(['hrs','mge','cm3','rat','vef'].includes(ext)){ const img=decodeCoco3(name,buf); if(!img){flash('Could not decode '+name);return;} openIndexedImage(img,name); return; }
+  flash('Unsupported file type: .'+ext);
+}
+function openPNG(file){
+  const img=new Image(); const url=URL.createObjectURL(file);
+  img.onload=()=>{ URL.revokeObjectURL(url);
+    const c=document.createElement('canvas');c.width=img.width;c.height=img.height;const x=c.getContext('2d');x.drawImage(img,0,0);
+    const data=x.getImageData(0,0,img.width,img.height).data;
+    const indexed=quantize16(data,img.width,img.height);
+    openIndexedImage(indexed, file.name);
+  };
+  img.src=url;
+}
+function openIndexedImage(img, name){
+  const cm=buildColorMap(img);
+  pushUndo();
+  const L=rasterizeToLayer(img, cm.map, name);
+  layers.push(L); activeLayer=layers.length-1;
+  setTitle(name); buildLayerList(); render();
+  // store for re-mapping
+  lastImport={img, map:cm.map, colors:cm.colors, layerIndex:activeLayer};
+  showMappingDialog(true);
+}
+let lastImport=null;
+
+/* ===================== Color mapping dialog ===================== */
+function showMappingDialog(isNew){
+  if(!lastImport){ flash('No imported image to remap. Open a CoCo 3 image or PNG first.'); return; }
+  const {colors,map}=lastImport;
+  let cells=colors.map(c=>{
+    const rgb=c.rgb; const sw=`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+    return `<div class="mapcell" data-ci="${c.index}">
+      <div class="sw" style="background:${sw}"></div>
+      <div style="font-size:10px">#${c.index} · ${c.count}px</div>
+      <img class="pat" data-ci="${c.index}" src="${tileURL(PALETTE[map[c.index]],4)}" title="Click to cycle pattern">
+      <div class="pidx" style="font-size:10px">${patName(map[c.index])}</div>
+    </div>`;
+  }).join('');
+  showModal(`<h3>Map ${colors.length} colors → artifact patterns</h3>
+    <div style="font-size:12px;color:#444;max-width:480px">Each source color is assigned a CoCo artifact pattern. Click a pattern swatch to cycle through all ${PALETTE.length} options; shift-click to go back.</div>
+    <div id="mapgrid">${cells}</div>
+    <div class="row"><button class="btn" id="mapauto">Auto</button><button class="btn default" id="mapok">Apply</button></div>`);
+  dlg.querySelectorAll('img.pat').forEach(im=>{
+    im.onclick=(e)=>{ const ci=+im.dataset.ci; let p=map[ci]; p=(p+(e.shiftKey?-1:1)+PALETTE.length)%PALETTE.length; map[ci]=p; im.src=tileURL(PALETTE[p],4); im.parentElement.querySelector('.pidx').textContent=patName(p); };
+  });
+  document.getElementById('mapauto').onclick=()=>{ const cm=buildColorMap(lastImport.img); lastImport.map=cm.map; showMappingDialog(false); applyMapping(); };
+  document.getElementById('mapok').onclick=()=>{ applyMapping(); closeModal(); };
+}
+function patName(i){ return PAT_NAMES[i]||('Pat '+(i+1)); }
+function applyMapping(){
+  if(!lastImport)return;
+  const li=lastImport.layerIndex;
+  const L=rasterizeToLayer(lastImport.img, lastImport.map, layers[li]?layers[li].name:'image');
+  if(layers[li]){ layers[li].bmp=L.bmp; layers[li].mask=L.mask; } else { layers.push(L); }
+  buildLayerList(); render();
+}
+
+/* ===================== Save actions ===================== */
+/* The CoCo PMODE 4 page is fixed at 256x192. Content can never exceed that in
+   this app, but we guard every save and warn if dimensions are out of range
+   (e.g. a corrupted project or a future change). Returns true if OK to save. */
+function checkSaveSize(cb){
+  if(W>256||H>192){
+    flash(`Cannot save: image is ${W}×${H}. The maximum size is 256×192 (one CoCo PMODE 4 page). Resize the image first.`);
+    return false;
+  }
+  if(cb) cb();
+  return true;
+}
+function saveJSON(){ checkSaveSize(()=>dl(new Blob([projectToJSON(docTitle)],{type:'application/json'}), (docTitle||'untitled')+'.json')); }
+function savePNG(){
+  if(!checkSaveSize()) return;
+  // export the composited artifact image at 2x
+  const page=composite(); const c=document.createElement('canvas');c.width=W*2;c.height=H*2;const x=c.getContext('2d');x.imageSmoothingEnabled=false;
+  const tmp=document.createElement('canvas');tmp.width=W;tmp.height=H;const tx=tmp.getContext('2d');const id=tx.createImageData(W,H);
+  const oCol=cssBit?COL.blue:COL.orange,bCol=cssBit?COL.orange:COL.blue;
+  for(let y=0;y<H;y++)for(let xx=0;xx<W;xx+=2){const hi=page[y*W+xx],lo=page[y*W+xx+1];let col;if(dispMode==='rgb'){for(const[cx,bit]of[[xx,hi],[xx+1,lo]]){const i=(y*W+cx)*4;const cc=bit?COL.white:COL.black;id.data[i]=cc[0];id.data[i+1]=cc[1];id.data[i+2]=cc[2];id.data[i+3]=255;}continue;}if(hi&&lo)col=COL.white;else if(hi&&!lo)col=bCol;else if(!hi&&lo)col=oCol;else col=COL.black;for(const cx of[xx,xx+1]){const i=(y*W+cx)*4;id.data[i]=col[0];id.data[i+1]=col[1];id.data[i+2]=col[2];id.data[i+3]=255;}}
+  tx.putImageData(id,0,0); x.drawImage(tmp,0,0,W*2,H*2);
+  c.toBlob(b=>dl(b,(docTitle||'untitled')+'.png'));
+}
+function curPage(){ return bmpToPage(composite()); }
+function saveMAX(){ checkSaveSize(()=>dl(new Blob([writeLoadm(curPage())],{type:'application/octet-stream'}), (docTitle||'untitled')+'.MAX')); }
+function saveBIN(){ checkSaveSize(()=>dl(new Blob([curPage()],{type:'application/octet-stream'}), (docTitle||'untitled')+'.BIN')); }
+function saveRLE(){ checkSaveSize(()=>dl(new Blob([pageToRLE(curPage())],{type:'application/octet-stream'}), (docTitle||'untitled')+'.RLE')); }
+function saveASM(){ checkSaveSize(()=>dl(new Blob([pageToAsm(curPage(),docTitle||'PICTURE')],{type:'text/plain'}), (docTitle||'untitled')+'.asm')); }
+
+/* Create a fresh blank 35-track .DSK and mount it in the gallery, so the
+   user can then Save images into it. */
+function createBlankDsk(){
+  showModal(`<h3>Create New .DSK</h3>
+    <div style="font-size:12px;color:#444;max-width:360px">Creates a fresh, empty 35-track CoCo disk (156 KB) and mounts it. You can then save images into it from “Save As…”, and download the finished .DSK from the Disk Gallery.</div>
+    <label class="fld">Disk name: <input class="txt" id="dknm" value="NEWDISK" maxlength="12" style="width:140px"></label>
+    <div class="row"><button class="btn" id="c">Cancel</button><button class="btn default" id="ok">Create</button></div>`);
+  document.getElementById('c').onclick=closeModal;
+  document.getElementById('ok').onclick=()=>{
+    const nm=(document.getElementById('dknm').value||'NEWDISK').replace(/[^A-Za-z0-9._-]/g,'').slice(0,12)||'NEWDISK';
+    const disk=makeDsk([]);                 // empty disk
+    browseDsk(disk, nm.toUpperCase().endsWith('.DSK')?nm:nm+'.DSK');
+    closeModal();
+  };
+}
+
+/* Unified Save As: choose a format, and a destination. The mounted-disk option
+   only appears when a .DSK is currently mounted (created or opened). */
+function showSaveAsDialog(){
+  if(!checkSaveSize()) return;
+  const hasDisk=!!diskState;
+  const diskOpt=hasDisk
+    ? `<label class="fld"><input type="radio" name="dest" value="disk" checked> Save to mounted disk: <b>${diskState.name}</b></label>
+       <label class="fld"><input type="radio" name="dest" value="file"> Download to computer</label>`
+    : `<label class="fld"><input type="radio" name="dest" value="file" checked> Download to computer</label>
+       <div style="font-size:11px;color:#777;margin:2px 0 6px 0">Tip: use “Create .DSK…” first to also save into a CoCo disk.</div>`;
+  showModal(`<h3>Save As</h3>
+    <label class="fld">Format:
+      <select class="txt" id="sfmt">
+        <option value="MAX">CoCo Max image (.MAX)</option>
+        <option value="BIN">Binary PMODE 4 (.BIN)</option>
+        <option value="PNG">PNG image (.PNG)</option>
+        <option value="RLE">RLE compressed (.RLE)</option>
+        <option value="ASM">Assembly source (.ASM)</option>
+      </select></label>
+    <label class="fld">Name: <input class="txt" id="sname" value="${(docTitle||'PIC').replace(/\.[^.]*$/,'')}" style="width:140px"></label>
+    <div style="border-top:1px dotted #999;margin:8px 0;padding-top:8px">${diskOpt}</div>
+    <label class="fld" id="loaderrow" style="display:none"><input type="checkbox" id="addloader"> Add a BASIC loader (.BAS) that displays this image</label>
+    <div class="row"><button class="btn" id="c">Cancel</button><button class="btn default" id="ok">Save</button></div>`);
+  // PNG/RLE/ASM can't go onto a CoCo disk meaningfully — only MAX/BIN do.
+  const fmtSel=document.getElementById('sfmt');
+  function syncDest(){
+    const f=fmtSel.value;
+    const diskRadio=dlg.querySelector('input[name=dest][value=disk]');
+    if(diskRadio){
+      const canDisk=(f==='MAX'||f==='BIN');
+      diskRadio.disabled=!canDisk;
+      if(!canDisk){ const fr=dlg.querySelector('input[name=dest][value=file]'); if(fr) fr.checked=true; }
+    }
+    // BASIC-loader option only for BIN saved to a mounted disk
+    const dest=(dlg.querySelector('input[name=dest]:checked')||{}).value;
+    const showLoader=(f==='BIN' && dest==='disk' && hasDisk);
+    document.getElementById('loaderrow').style.display=showLoader?'block':'none';
+  }
+  fmtSel.onchange=syncDest;
+  dlg.querySelectorAll('input[name=dest]').forEach(r=>r.onchange=syncDest);
+  syncDest();
+  document.getElementById('c').onclick=closeModal;
+  document.getElementById('ok').onclick=()=>{
+    const fmt=fmtSel.value;
+    const nm=(document.getElementById('sname').value||'PIC').replace(/\.[^.]*$/,'');
+    const dest=(dlg.querySelector('input[name=dest]:checked')||{}).value||'file';
+    const addLoader=document.getElementById('addloader') && document.getElementById('addloader').checked;
+    if(dest==='disk' && diskState && (fmt==='MAX'||fmt==='BIN')){
+      saveToMountedDisk(nm, fmt, fmt==='BIN' && addLoader);
+    } else {
+      const oldTitle=docTitle; docTitle=nm;
+      if(fmt==='MAX') saveMAX(); else if(fmt==='BIN') saveBIN(); else if(fmt==='PNG') savePNG(); else if(fmt==='RLE') saveRLE(); else if(fmt==='ASM') saveASM();
+      docTitle=oldTitle;
+    }
+    closeModal();
+  };
+}
+/* Save the current image into the mounted disk image (overwrite if name+ext
+   already exists), then refresh the gallery. Optionally also writes/overwrites
+   a BASIC loader (.BAS) of the same base name that displays the image. */
+function saveToMountedDisk(name, ext, addLoader){
+  if(!diskState) return;
+  const nm=name.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8)||'PIC';
+  const page=curPage(); const bytes=ext==='MAX'?writeLoadm(page):page;
+  const snapshot=diskState.files.slice();
+  const idx=diskState.files.findIndex(x=>x.name===nm&&x.ext===ext);
+  if(idx>=0){ diskState.files[idx]={name:nm,ext,ftype:2,ascii:0,bytes}; diskState.sel=idx; }
+  else { diskState.files.push({name:nm,ext,ftype:2,ascii:0,bytes}); diskState.sel=diskState.files.length-1; }
+  if(addLoader){
+    const loader=makeBasicLoader(nm);
+    const li=diskState.files.findIndex(x=>x.name===nm&&x.ext==='BAS');
+    if(li>=0){ diskState.files[li]={name:nm,ext:'BAS',ftype:0,ascii:0xFF,bytes:loader}; }
+    else { diskState.files.push({name:nm,ext:'BAS',ftype:0,ascii:0xFF,bytes:loader}); }
+  }
+  try{ diskState.disk=rebuildDsk(diskState.files); }
+  catch(e){ diskState.files=snapshot; flash('Not enough room on the disk for this image'+(addLoader?' and loader.':'.')); return; }
+  document.getElementById('diskwin').classList.remove('hidden');
+  buildWindowsMenu(); renderDiskGallery();
+  flash('Saved '+nm+'.'+ext+(addLoader?' + '+nm+'.BAS loader':'')+' to '+diskState.name);
+}
+
+function saveDSK(){
+  if(!checkSaveSize()) return;
+  showModal(`<h3>Save to CoCo Disk</h3>
+   <label class="fld">Filename on disk (8.3): <input class="txt" id="dskname" value="${(docTitle||'PIC').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8)}" maxlength="8"> . 
+     <select class="txt" id="dskext"><option>MAX</option><option>BIN</option></select></label>
+   <label class="fld"><input type="checkbox" id="dskblank" checked> Generate a fresh blank 35-track disk</label>
+   <div class="row"><button class="btn" id="c">Cancel</button><button class="btn default" id="ok">Save .DSK</button></div>`);
+  document.getElementById('c').onclick=closeModal;
+  document.getElementById('ok').onclick=()=>{
+    const nm=document.getElementById('dskname').value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8)||'PIC';
+    const ext=document.getElementById('dskext').value;
+    const page=curPage(); const bytes=ext==='MAX'?writeLoadm(page):page;
+    const disk=makeDsk([{name:nm,ext,bytes}]);
+    dl(new Blob([disk],{type:'application/octet-stream'}), (docTitle||'disk')+'.dsk');
+    closeModal();
+  };
+}
+/* ===================== Disk gallery (floating window) ===================== */
+let diskState=null;   // { disk:Uint8Array, name, files:[{name,ext,ftype,bytes}], sel }
+
+function makePageThumb(page, w, h){
+  // `page` is a packed 6144-byte PMODE 4 page; unpack to a 1bpp bitmap first.
+  const bm = (page.length<W*H) ? pageToBmp(page) : page;
+  const c=document.createElement('canvas'); c.width=W; c.height=H; const x=c.getContext('2d');
+  const id=x.createImageData(W,H);
+  const oCol=COL.orange,bCol=COL.blue;
+  for(let y=0;y<H;y++)for(let xx=0;xx<W;xx+=2){
+    const hi=bm[y*W+xx],lo=bm[y*W+xx+1]; let col;
+    if(hi&&lo)col=COL.white; else if(hi&&!lo)col=bCol; else if(!hi&&lo)col=oCol; else col=COL.black;
+    for(const cx of[xx,xx+1]){const i=(y*W+cx)*4;id.data[i]=col[0];id.data[i+1]=col[1];id.data[i+2]=col[2];id.data[i+3]=255;}
+  }
+  x.putImageData(id,0,0);
+  const t=document.createElement('canvas'); t.width=w; t.height=h; const tx=t.getContext('2d'); tx.imageSmoothingEnabled=false; tx.drawImage(c,0,0,w,h);
+  return t.toDataURL();
+}
+function makeImgThumb(img, w, h){
+  const c=document.createElement('canvas'); c.width=img.w; c.height=img.h; const x=c.getContext('2d');
+  const id=x.createImageData(img.w,img.h);
+  for(let i=0;i<img.w*img.h;i++){ const rgb=img.pal[img.indices[i]]||[0,0,0]; const j=i*4; id.data[j]=rgb[0];id.data[j+1]=rgb[1];id.data[j+2]=rgb[2];id.data[j+3]=255; }
+  x.putImageData(id,0,0);
+  const t=document.createElement('canvas'); t.width=w; t.height=h; const tx=t.getContext('2d'); tx.imageSmoothingEnabled=false; tx.drawImage(c,0,0,w,h);
+  return t.toDataURL();
+}
+/* Placeholder thumbnail with a centered label (e.g. for unsupported .MAC). */
+function makeLabelThumb(label, w, h){
+  const t=document.createElement('canvas'); t.width=w; t.height=h; const x=t.getContext('2d');
+  x.fillStyle='#445'; x.fillRect(0,0,w,h);
+  x.fillStyle='#fff'; x.font='bold 14px monospace'; x.textAlign='center'; x.textBaseline='middle';
+  x.fillText(label, w/2, h/2-6);
+  x.font='8px monospace'; x.fillStyle='#bcd'; x.fillText('not supported', w/2, h/2+10);
+  return t.toDataURL();
+}
+
+/* Entry point: mount a disk (Uint8Array) and open the gallery window. */
+function browseDsk(diskBytes, diskName){
+  const entries=dskListFiles(diskBytes);
+  // read each file's bytes once and keep them, so edits rebuild cleanly
+  const files=entries.map(e=>({ name:e.name, ext:e.ext, ftype:e.ftype, bytes:dskReadFile(diskBytes,e) }));
+  diskState={ disk:diskBytes.slice(), name:diskName||'Disk', files, sel:-1 };
+  document.getElementById('diskwin').classList.remove('hidden');
+  document.getElementById('disktitle').textContent=diskName||'Disk';
+  document.querySelectorAll('.win').forEach(w=>w.classList.remove('focused'));
+  document.getElementById('diskwin').classList.add('focused');
+  buildWindowsMenu();
+  renderDiskGallery();
+}
+function renderDiskGallery(){
+  if(!diskState) return;
+  const gal=document.getElementById('diskgallery'); gal.innerHTML='';
+  const info=document.getElementById('diskinfo');
+  const usage=dskUsage(diskState.disk);
+  const usedKB=(usage.used*usage.granBytes/1024).toFixed(1);
+  const freeKB=(usage.free*usage.granBytes/1024).toFixed(1);
+  info.textContent=`${diskState.name} — ${diskState.files.length} files · ${usage.used}/${usage.total} granules used (${usedKB} KB used, ${freeKB} KB free)`;
+  diskState.files.forEach((f,i)=>{
+    const cell=document.createElement('div'); cell.className='diskitem'+(i===diskState.sel?' active':''); cell.dataset.i=i;
+    const th=document.createElement('img'); th.className='dthumb';
+    const dec=decodeDiskFile(f.name,f.ext,f.bytes);
+    if(dec&&dec.kind==='page') th.src=makePageThumb(dec.page,80,60);
+    else if(dec&&dec.kind==='img') th.src=makeImgThumb(dec.img,80,60);
+    else if(dec&&dec.kind==='mac') th.src=makeLabelThumb('MAC',80,60);
+    else { th.style.background='#555'; }
+    const nm=document.createElement('div'); nm.className='dname'; nm.textContent=f.name+'.'+f.ext; nm.title=f.name+'.'+f.ext;
+    cell.appendChild(th); cell.appendChild(nm);
+    cell.onclick=()=>{ diskState.sel=i; renderDiskGallery(); };
+    cell.ondblclick=()=>{ diskState.sel=i; diskLoadSelected(); };
+    gal.appendChild(cell);
+  });
+  // enable/disable buttons
+  const has=diskState.sel>=0;
+  ['dkload','dkdup','dkdel'].forEach(id=>document.getElementById(id).disabled=!has);
+}
+function diskLoadSelected(){
+  if(!diskState||diskState.sel<0) return;
+  const f=diskState.files[diskState.sel];
+  const dec=decodeDiskFile(f.name,f.ext,f.bytes);
+  if(!dec){ flash('Cannot decode '+f.name+'.'+f.ext+' as an image.'); return; }
+  if(dec.kind==='mac'){ flash(f.name+'.'+f.ext+' is a CoCo Max II ".MAC" file. This native format uses a proprietary compression that isn\'t supported yet — convert it to .MAX or .BIN on a real CoCo (or with MAC2CC3) and it will load.'); return; }
+  pushUndo();
+  if(dec.kind==='page'){
+    const L=makeLayer(f.name+'.'+f.ext,false); const bm=pageToBmp(dec.page);
+    for(let i=0;i<bm.length;i++){L.bmp[i]=bm[i];L.mask[i]=1;}
+    layers.push(L); activeLayer=layers.length-1; setTitle(f.name+'.'+f.ext);
+    buildLayerList(); render();
+  } else {
+    openIndexedImage(dec.img, f.name+'.'+f.ext);   // routes through mapping dialog
+  }
+}
+function diskDeleteSelected(){
+  if(!diskState||diskState.sel<0) return;
+  const f=diskState.files[diskState.sel];
+  showModal(`<h3>Delete ${f.name}.${f.ext}?</h3><div style="font-size:12px;color:#444">This removes the file from the in-memory disk image. Use “Download .DSK” to save the modified disk.</div><div class="row"><button class="btn" id="c">Cancel</button><button class="btn default" id="ok">Delete</button></div>`);
+  document.getElementById('c').onclick=closeModal;
+  document.getElementById('ok').onclick=()=>{
+    const snapshot=diskState.files.slice();
+    diskState.files.splice(diskState.sel,1); diskState.sel=-1;
+    try{ diskState.disk=rebuildDsk(diskState.files); }
+    catch(e){ diskState.files=snapshot; flash('Error rebuilding disk.'); }
+    renderDiskGallery(); closeModal();
+  };
+}
+function diskDuplicateSelected(){
+  if(!diskState||diskState.sel<0) return;
+  const f=diskState.files[diskState.sel];
+  // capacity check before committing
+  const need=diskState.files.reduce((a,x)=>a+Math.max(1,Math.ceil(x.bytes.length/DSK_GRANB)),0)
+            + Math.max(1,Math.ceil(f.bytes.length/DSK_GRANB));
+  if(need>68){ flash('Not enough room on disk to duplicate this file.'); return; }
+  let base=f.name.slice(0,6), n=2, nn;
+  do{ nn=(base+n).slice(0,8); n++; }while(diskState.files.some(x=>x.name===nn&&x.ext===f.ext)&&n<99);
+  const snapshot=diskState.files.slice();
+  diskState.files.push({name:nn, ext:f.ext, ftype:f.ftype, bytes:f.bytes.slice()});
+  try{ diskState.disk=rebuildDsk(diskState.files); diskState.sel=diskState.files.length-1; }
+  catch(e){ diskState.files=snapshot; flash('Not enough room on disk to duplicate this file.'); }
+  renderDiskGallery();
+}
+function diskSaveCurrent(){
+  if(!diskState){ flash('Mount a disk first.'); return; }
+  if(!checkSaveSize()) return;
+  // Save the current composited image to the disk. If a file is selected,
+  // overwrite it (keeping its name/ext); otherwise prompt for a new name.
+  const sel=diskState.sel>=0?diskState.files[diskState.sel]:null;
+  const defName=sel?sel.name:(docTitle||'PIC').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8)||'PIC';
+  const defExt=sel?sel.ext:'MAX';
+  showModal(`<h3>Save current image to disk</h3>
+    <label class="fld">Name: <input class="txt" id="sn" value="${defName}" maxlength="8" style="width:120px"> .
+      <select class="txt" id="se"><option ${defExt==='MAX'?'selected':''}>MAX</option><option ${defExt==='BIN'?'selected':''}>BIN</option></select></label>
+    ${sel?`<div style="font-size:12px;color:#444">This will overwrite <b>${sel.name}.${sel.ext}</b> if you keep the same name.</div>`:''}
+    <div class="row"><button class="btn" id="c">Cancel</button><button class="btn default" id="ok">Save to Disk</button></div>`);
+  document.getElementById('c').onclick=closeModal;
+  document.getElementById('ok').onclick=()=>{
+    const nm=document.getElementById('sn').value.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,8)||'PIC';
+    const ex=document.getElementById('se').value;
+    const page=curPage(); const bytes=ex==='MAX'?writeLoadm(page):page;
+    const existingIdx=diskState.files.findIndex(x=>x.name===nm&&x.ext===ex);
+    const snapshot=diskState.files.slice();
+    if(existingIdx>=0){ diskState.files[existingIdx]={name:nm,ext:ex,ftype:2,bytes}; diskState.sel=existingIdx; }
+    else { diskState.files.push({name:nm,ext:ex,ftype:2,bytes}); diskState.sel=diskState.files.length-1; }
+    try{ diskState.disk=rebuildDsk(diskState.files); }
+    catch(e){ diskState.files=snapshot; diskState.sel=existingIdx; flash('Not enough room on disk for this image.'); return; }
+    renderDiskGallery(); closeModal();
+  };
+}
+function diskDownload(){
+  if(!diskState){ flash('Mount a disk first.'); return; }
+  dl(new Blob([diskState.disk],{type:'application/octet-stream'}), (diskState.name||'disk').replace(/\.dsk$/i,'')+'.dsk');
+}
+
+/* ===================== Resize (with algorithms) ===================== */
+/* Resize the whole image's content. The CoCo page stays 256x192; we cannot
+   exceed that, so target dims are clamped to <=256x192. Algorithms:
+   nearest (blocky), bilinear-threshold (smooth then 50% threshold),
+   and area-average-threshold (good for downscaling).                      */
+function resizeImage(tw, th, algo){
+  tw=Math.max(1,Math.min(W,tw|0)); th=Math.max(1,Math.min(H,th|0));
+  pushUndo();
+  // determine current content bounds across all layers (union of masks)
+  layers.forEach(L=>{
+    const nb=new Uint8Array(W*H), nm=new Uint8Array(W*H);
+    for(let dy=0;dy<th;dy++)for(let dx=0;dx<tw;dx++){
+      const fx=dx*(W/tw), fy=dy*(H/th);
+      let lit, on;
+      if(algo==='nearest'){
+        const sx=Math.min(W-1,fx|0), sy=Math.min(H-1,fy|0), si=sy*W+sx;
+        on=L.mask[si]; lit=L.bmp[si];
+      } else {
+        // sample a box and average (covers bilinear-ish + area)
+        const x0=fx|0, y0=fy|0, x1=Math.min(W-1,Math.ceil((dx+1)*(W/tw))-1), y1=Math.min(H-1,Math.ceil((dy+1)*(H/th))-1);
+        let sumLit=0,sumOn=0,n=0;
+        for(let yy=y0;yy<=Math.max(y0,y1);yy++)for(let xx=x0;xx<=Math.max(x0,x1);xx++){ const si=yy*W+xx; if(L.mask[si]){sumOn++; sumLit+=L.bmp[si];} n++; }
+        on=sumOn> (n/2)?1:(sumOn>0?1:0);
+        lit=(sumOn>0 && sumLit*2>=sumOn)?1:0;
+      }
+      const di=dy*W+dx; nb[di]=lit; nm[di]=on;
+    }
+    L.bmp=nb; L.mask=nm;
+  });
+  selRect=null; selMask=null;
+  render(); buildLayerList();
+}
+function showResizeDialog(){
+  showModal(`<h3>Resize Image</h3>
+    <div style="font-size:12px;color:#444;max-width:360px">Maximum size is 256 × 192 (one CoCo PMODE 4 page). Larger values are clamped.</div>
+    <label class="fld">Width: <input class="txt" id="rw" type="number" min="1" max="256" value="${W}" style="width:80px"> px</label>
+    <label class="fld">Height: <input class="txt" id="rh" type="number" min="1" max="192" value="${H}" style="width:80px"> px</label>
+    <label class="fld">Algorithm:
+      <select class="txt" id="ralgo">
+        <option value="nearest">Nearest neighbor (blocky)</option>
+        <option value="bilinear">Bilinear + threshold (smooth)</option>
+        <option value="area">Area average + threshold (best downscale)</option>
+      </select></label>
+    <div class="row"><button class="btn" id="c">Cancel</button><button class="btn default" id="ok">Resize</button></div>`);
+  document.getElementById('c').onclick=closeModal;
+  document.getElementById('ok').onclick=()=>{
+    let tw=+document.getElementById('rw').value, th=+document.getElementById('rh').value;
+    const algo=document.getElementById('ralgo').value;
+    if(tw>W||th>H){ tw=Math.min(W,tw); th=Math.min(H,th); }
+    resizeImage(tw,th,algo); closeModal();
+  };
+}
+
+/* ===================== Goodies actions ===================== */
+function invertLayer(){ const L=curLayer(); for(let i=0;i<W*H;i++){ if(L.mask[i]) L.bmp[i]=L.bmp[i]?0:1; } }
+function fillLayer(){ const L=curLayer(); const r=selRect?normRect(selRect):{x0:0,y0:0,x1:W-1,y1:H-1}; for(let y=r.y0;y<=r.y1;y++)for(let x=r.x0;x<=r.x1;x++){const i=y*W+x;L.bmp[i]=patBit(x,y);L.mask[i]=1;} }
+function flipH(){ const L=curLayer(); for(const A of [L.bmp,L.mask]) for(let y=0;y<H;y++)for(let x=0;x<W/2;x++){const i=y*W+x,j=y*W+(W-1-x);const t=A[i];A[i]=A[j];A[j]=t;} }
+function flipV(){ const L=curLayer(); for(const A of [L.bmp,L.mask]) for(let y=0;y<H/2;y++)for(let x=0;x<W;x++){const i=y*W+x,j=(H-1-y)*W+x;const t=A[i];A[i]=A[j];A[j]=t;} }
+function rot180(){ const L=curLayer(); for(const A of [L.bmp,L.mask]) A.reverse(); }
+function traceEdges(){ const L=curLayer(); const src=L.bmp.slice(),sm=L.mask.slice(); for(let y=0;y<H;y++)for(let x=0;x<W;x++){const i=y*W+x;let edge=0;if(sm[i]&&src[i]){const n=[[x-1,y],[x+1,y],[x,y-1],[x,y+1]];for(const[nx,ny]of n){if(!inb(nx,ny)|| !sm[ny*W+nx] || !src[ny*W+nx]){edge=1;break;}}}L.bmp[i]=edge;L.mask[i]=edge||sm[i]?1:L.mask[i];if(!edge&&src[i])L.bmp[i]=0;} }
+
+function editPattern(){
+  let tile=curPattern.slice();
+  // Convention: bit 1 = lit pixel. A lit pixel at an even column reads as blue,
+  // at an odd column as orange; two adjacent lit pixels read white; all-off is
+  // solid black. Each editor cell shows the color it would actually produce.
+  function cellColor(x,y){
+    const on=(tile[y]>>(7-x))&1;
+    if(!on) return '#000';
+    const leftOn  = x>0 ? (tile[y]>>(7-(x-1)))&1 : 0;
+    const rightOn = x<7 ? (tile[y]>>(7-(x+1)))&1 : 0;
+    if(leftOn||rightOn) return 'rgb(236,236,236)';            // white (paired)
+    // lone lit pixel: even col -> blue, odd col -> orange
+    return (x&1)===0 ? 'rgb(40,70,210)' : 'rgb(232,120,28)';
+  }
+  function grid(){
+    let s='';
+    for(let y=0;y<8;y++)for(let x=0;x<8;x++){
+      s+=`<div data-x="${x}" data-y="${y}" style="width:22px;height:22px;border:1px solid #888;background:${cellColor(x,y)}"></div>`;
+    }
+    return s;
+  }
+  showModal(`<h3>Edit Pattern</h3>
+    <div style="font-size:11px;color:#555;max-width:340px;margin-bottom:6px">Click a cell to toggle a lit pixel. A lone pixel shows blue (even column) or orange (odd column); two side-by-side show white; all-off is solid black — just like the CoCo artifact display.</div>
+    <div style="display:flex;gap:16px;align-items:center">
+    <div id="pe" style="display:grid;grid-template-columns:repeat(8,22px);grid-auto-rows:22px;background:#000;padding:2px"></div>
+    <img id="peprev" style="width:80px;height:80px;border:2px solid #000;image-rendering:pixelated">
+   </div><div class="row"><button class="btn" id="c">Cancel</button><button class="btn default" id="ok">OK</button></div>`);
+  const pe=document.getElementById('pe'); const prev=document.getElementById('peprev');
+  function refresh(){ pe.innerHTML=grid(); prev.src=tileURL(tile,8); pe.querySelectorAll('div').forEach(d=>d.onclick=()=>{const x=+d.dataset.x,y=+d.dataset.y;tile[y]^=(1<<(7-x));refresh();}); }
+  refresh();
+  document.getElementById('c').onclick=closeModal;
+  document.getElementById('ok').onclick=()=>{ curPattern=tile.slice(); curPatternIndex=-1; drawCurPat(); buildPalette(); closeModal(); };
+}
+
+/* ===================== Action dispatch ===================== */
+function applyZoom(){ document.getElementById('zoomlabel').textContent=Math.round(SCALE/3*100)+'%'; sizeCanvas(); render(); }
+function doAction(a){
+  switch(a){
+    case 'new': initLayers(); setTitle('untitled'); buildLayerList(); render(); break;
+    case 'open': actionOpen(); break;
+    case 'savejson': saveJSON(); break;
+    case 'savepng': savePNG(); break;
+    case 'savemax': saveMAX(); break;
+    case 'savebin': saveBIN(); break;
+    case 'saverle': saveRLE(); break;
+    case 'saveasm': saveASM(); break;
+    case 'saveas': showSaveAsDialog(); break;
+    case 'createdsk': createBlankDsk(); break;
+    case 'savedsk': saveDSK(); break;
+    case 'opendsk': actionOpen(); break;
+    case 'undo': doUndo(); break;
+    case 'redo': doRedo(); break;
+    case 'cut': doCut(); updateEditMenu(); break;
+    case 'copy': doCopy(); break;
+    case 'paste': doPaste(); break;
+    case 'clear': if(selRect||selMask){pushUndo();clearSelectionArea();render();} break;
+    case 'selall': selMask=null; selRect={x0:0,y0:0,x1:W-1,y1:H-1}; updateEditMenu(); render(); break;
+    case 'selinv': invertSelection(); break;
+    case 'deselect': deselect(); break;
+    case 'grid': gridOn=!gridOn; buildMenu('goodies',MENUS.goodies); render(); break;
+    case 'rulers': rulersOn=!rulersOn; buildMenu('goodies',MENUS.goodies); render(); break;
+    case 'resize': showResizeDialog(); break;
+    case 'cropsel': if(selRect){ applyCrop(); } else { flash('Make a selection first, then Crop to Selection.'); } break;
+    case 'fatbits': fatBits=!fatBits; if(fatBits){fbOX=Math.max(0,Math.min(W-fbCols,(selRect?normRect(selRect).x0:W/2-fbCols/2)|0));fbOY=Math.max(0,Math.min(H-fbRows,(selRect?normRect(selRect).y0:H/2-fbRows/2)|0));} document.getElementById('fatbtn').classList.toggle('on',fatBits); buildMenu('goodies',MENUS.goodies); render(); break;
+    case 'showpage': SCALE=3; applyZoom(); break;
+    case 'editpat': editPattern(); break;
+    case 'invert': pushUndo(); invertLayer(); render(); break;
+    case 'fill': pushUndo(); fillLayer(); render(); break;
+    case 'trace': pushUndo(); traceEdges(); render(); break;
+    case 'fliph': pushUndo(); flipH(); render(); break;
+    case 'flipv': pushUndo(); flipV(); render(); break;
+    case 'rot': pushUndo(); rot180(); render(); break;
+    case 'remap': showMappingDialog(false); break;
+  }
+}
+
+/* keyboard shortcuts */
+document.addEventListener('keydown',e=>{
+  if(e.target===textInput) return;
+  const k=e.key.toLowerCase();
+  // Fat Bits panning with arrow keys
+  if(fatBits && ['arrowleft','arrowright','arrowup','arrowdown'].includes(k)){
+    e.preventDefault();
+    const step=e.shiftKey?8:2;
+    if(k==='arrowleft')  fbOX=Math.max(0, fbOX-step);
+    if(k==='arrowright') fbOX=Math.min(W-fbCols, fbOX+step);
+    if(k==='arrowup')    fbOY=Math.max(0, fbOY-step);
+    if(k==='arrowdown')  fbOY=Math.min(H-fbRows, fbOY+step);
+    render(); return;
+  }
+  if(e.metaKey||e.ctrlKey){
+    if(k==='z'&&e.shiftKey){e.preventDefault();doRedo();}
+    else if(k==='z'){e.preventDefault();doUndo();}
+    else if(k==='y'){e.preventDefault();doRedo();}
+    else if(k==='x'){e.preventDefault();doCut();}
+    else if(k==='c'){e.preventDefault();doCopy();}
+    else if(k==='v'){e.preventDefault();doPaste();}
+    else if(k==='a'){e.preventDefault();doAction('selall');}
+    else if(k==='i'&&e.shiftKey){e.preventDefault();doAction('selinv');}
+    else if(k==='d'){e.preventDefault();doAction('deselect');}
+    else if(k==='o'){e.preventDefault();actionOpen();}
+    else if(k==='s'){e.preventDefault();showSaveAsDialog();}
+    else if(k==='e'){e.preventDefault();doAction('trace');}
+  }
+});
+
+/* ===================== Floating window dragging ===================== */
+function makeDraggable(win){
+  const bar=win.querySelector('.titlebar'); if(!bar)return;
+  bar.addEventListener('pointerdown',e=>{
+    if(e.target.classList.contains('closebox'))return;
+    document.querySelectorAll('.win').forEach(w=>w.classList.remove('focused')); win.classList.add('focused');
+    const r=win.getBoundingClientRect(); const ox=e.clientX-r.left, oy=e.clientY-r.top;
+    win.style.right='auto'; win.style.bottom='auto';
+    function mv(ev){ win.style.left=Math.max(0,ev.clientX-ox)+'px'; win.style.top=Math.max(26,ev.clientY-oy)+'px'; }
+    function up(){ document.removeEventListener('pointermove',mv); document.removeEventListener('pointerup',up); }
+    document.addEventListener('pointermove',mv); document.addEventListener('pointerup',up);
+  });
+  win.addEventListener('pointerdown',()=>{ document.querySelectorAll('.win').forEach(w=>w.classList.remove('focused')); win.classList.add('focused'); });
+}
+document.querySelectorAll('.closebox').forEach(cb=>cb.onclick=(e)=>{
+  e.stopPropagation();
+  const which=cb.dataset.close;
+  if(which==='disk'){ document.getElementById('diskwin').classList.add('hidden'); buildWindowsMenu(); return; }
+  // hide the parent window (doc included now); reachable again via Windows menu
+  const win=cb.closest('.win'); if(win){ win.classList.add('hidden'); buildWindowsMenu(); }
+});
+
+/* zoom & display buttons */
+document.getElementById('zoomin').onclick=()=>{ SCALE=Math.min(9,SCALE+1); applyZoom(); };
+document.getElementById('zoomout').onclick=()=>{ SCALE=Math.max(1,SCALE-1); applyZoom(); };
+document.getElementById('fatbtn').onclick=()=>doAction('fatbits');
+document.getElementById('dispbtn').onclick=()=>{ dispMode=dispMode==='composite'?'rgb':'composite'; document.getElementById('dispbtn').textContent=dispMode==='composite'?'Composite':'RGB'; render(); };
+document.getElementById('ntscbtn').onclick=()=>{ ntscFringe=!ntscFringe; document.getElementById('ntscbtn').classList.toggle('on',ntscFringe); buildPalette(); drawCurPat(); render(); };
+document.getElementById('cssbtn').onclick=()=>{ cssBit=cssBit?0:1; document.getElementById('cssbtn').textContent='CSS '+cssBit; render(); };
+document.getElementById('lnew').onclick=addLayer;
+document.getElementById('lmerge').onclick=mergeDown;
+document.getElementById('ldup').onclick=dupLayer;
+document.getElementById('ldel').onclick=delLayer;
+/* disk gallery buttons */
+document.getElementById('dkload').onclick=diskLoadSelected;
+document.getElementById('dksave').onclick=diskSaveCurrent;
+document.getElementById('dkdup').onclick=diskDuplicateSelected;
+document.getElementById('dkdel').onclick=diskDeleteSelected;
+document.getElementById('dkdownload').onclick=diskDownload;
+
+/* ===================== Boot ===================== */
+/* Pixel-exact artifact-stripe desktop: alternating 1px orange and 1px blue
+   scanlines (no black gaps), rendered as a 1x2 tile shown at 1:1 so each line
+   is exactly one pixel. No moire/diagonal seam. */
+function setDesktopBackground(){
+  const tw=1, th=2;
+  const c=document.createElement('canvas'); c.width=tw; c.height=th;
+  const x=c.getContext('2d'); const id=x.createImageData(tw,th);
+  const O=COL.orange, B=COL.blue;
+  const rows=[O,B];
+  for(let y=0;y<th;y++){ const col=rows[y]; const i=y*4; id.data[i]=col[0];id.data[i+1]=col[1];id.data[i+2]=col[2];id.data[i+3]=255; }
+  x.putImageData(id,0,0);
+  const url=c.toDataURL();
+  const d=document.getElementById('desktop');
+  d.style.backgroundImage=`url(${url})`;
+  d.style.backgroundSize=`1px 2px`;   /* exactly 1px orange + 1px blue, no scaling */
+  d.style.imageRendering='pixelated';
+}
+
+function boot(){
+  initLayers();
+  sizeCanvas();
+  setDesktopBackground();
+  buildToolbox(); buildPalette(); drawCurPat();
+  buildMenu('file',MENUS.file); buildMenu('edit',MENUS.edit); buildMenu('goodies',MENUS.goodies);
+  buildFontMenu(); buildStyleMenu(); buildWindowsMenu(); buildAboutMenu();
+  buildLayerList();
+  ['toolbox','docwin','layerwin','patwin','diskwin','previewwin'].forEach(id=>makeDraggable(document.getElementById(id)));
+  curPattern=PALETTE[1].slice(); curPatternIndex=1;   /* id 2 = Solid Black */
+  render();
+  // Lay out the floating windows: Layers and Preview right-aligned (disk
+  // gallery stays hidden until a disk is mounted).
+  document.getElementById('diskwin').classList.add('hidden');
+  resetWindowPositions();
+}
+boot();
+window.addEventListener('resize', ()=>{ /* keep right-aligned windows pinned */
+  const lw=document.getElementById('layerwin'); if(lw && lw.style.right){ /* already right-anchored, CSS handles it */ }
+});
+
+</script>
+</body>
+</html>
