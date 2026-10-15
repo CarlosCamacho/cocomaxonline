@@ -1,0 +1,39 @@
+name: "Feature request"
+description: "Suggest an improvement or new capability for CoCo Max Online."
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing an idea for CoCo Max Online! Please describe what you'd like and why it would be useful.
+  - type: textarea
+    id: idea
+    attributes:
+      label: What feature would you like?
+      description: Explain the new feature or improvement.
+      placeholder: "Example: Add a grid overlay that can be toggled on and off."
+    validations:
+      required: true
+  - type: textarea
+    id: benefit
+    attributes:
+      label: Why would this be useful?
+      description: What problem would the feature solve, or what would it make easier?
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: How should it work?
+      description: Describe how you imagine using the feature.
+      placeholder: "Example: Add a Grid option to the View menu with selectable spacing."
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds
+      description: Is there another way to achieve something similar today?
+  - type: textarea
+    id: examples
+    attributes:
+      label: Mockups, screenshots, or other references
+      description: Drag and drop relevant images or links here, if any.
